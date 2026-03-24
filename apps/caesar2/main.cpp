@@ -4,9 +4,11 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "romulus/core/logger.h"
 #include "romulus/data/binary_probe.h"
+#include "romulus/data/candidate_probe.h"
 #include "romulus/data/data_root.h"
 #include "romulus/data/file_inventory.h"
 #include "romulus/data/file_loader.h"
@@ -22,6 +24,7 @@ struct ParsedArguments {
   bool inventory_manifest = false;
   std::optional<std::string> inventory_manifest_out;
   std::optional<std::string> probe_file;
+  std::vector<std::string> probe_candidates;
   std::optional<std::string> export_tile_file;
   std::optional<std::string> export_palette_file;
   std::optional<std::string> export_output_file;
@@ -74,6 +77,16 @@ struct ParsedArguments {
       }
 
       parsed.probe_file = argv[++index];
+      continue;
+    }
+
+    if (argument == "--probe-candidate") {
+      if (index + 1 >= argc) {
+        romulus::core::log_error("Missing value after --probe-candidate.");
+        return std::nullopt;
+      }
+
+      parsed.probe_candidates.emplace_back(argv[++index]);
       continue;
     }
 
@@ -165,6 +178,11 @@ struct ParsedArguments {
     return std::nullopt;
   }
 
+  if (parsed.probe_file.has_value() && !parsed.probe_candidates.empty()) {
+    romulus::core::log_error("--probe-file and --probe-candidate are mutually exclusive.");
+    return std::nullopt;
+  }
+
   return parsed;
 }
 
@@ -230,6 +248,17 @@ int run_binary_probe(const std::filesystem::path& data_root, const std::string& 
 
   const auto report = romulus::data::probe_loaded_binary(loaded.value.value());
   std::cout << romulus::data::format_binary_probe_report(report);
+  return 0;
+}
+
+int run_candidate_probe(const std::filesystem::path& data_root, const std::vector<std::string>& candidates) {
+  const auto result = romulus::data::probe_candidate_files(data_root, candidates);
+  if (!result.ok()) {
+    romulus::core::log_error(result.error.value().message);
+    return 1;
+  }
+
+  std::cout << romulus::data::format_candidate_probe_report(result.value.value());
   return 0;
 }
 
@@ -314,7 +343,8 @@ int main(int argc, char* argv[]) {
   if (!parsed.has_value()) {
     romulus::core::log_error(
         "Usage: caesar2 [--smoke-test] [--data-dir <path>] [--inventory-manifest] [--manifest-out <path>] "
-        "[--probe-file <path>] [--export-tile-file <path> --export-palette-file <path> --export-output <path> "
+        "[--probe-file <path>] [--probe-candidate <path>] "
+        "[--export-tile-file <path> --export-palette-file <path> --export-output <path> "
         "[--index-zero-transparent]] [--view-tile-file <path> --view-palette-file <path> "
         "[--index-zero-transparent]]");
     return 1;
@@ -330,6 +360,10 @@ int main(int argc, char* argv[]) {
 
   if (parsed->probe_file.has_value()) {
     return run_binary_probe(data_root, parsed->probe_file.value());
+  }
+
+  if (!parsed->probe_candidates.empty()) {
+    return run_candidate_probe(data_root, parsed->probe_candidates);
   }
 
   if (parsed->export_tile_file.has_value()) {
