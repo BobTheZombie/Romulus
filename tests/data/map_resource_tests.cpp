@@ -72,6 +72,10 @@ int test_parse_map_header_success() {
   if (assert_true(map.overlay_tiles.empty(), "header-only parse should not decode overlay payload") != 0) {
     return 1;
   }
+  if (assert_true(map.trailing_data_size == 0 && map.trailing_data_preview.empty(),
+                  "header-only parse should not record trailing payload") != 0) {
+    return 1;
+  }
 
   return assert_true(map.flags == 0x12345678 && map.random_seed == 0x11223344,
                      "metadata fields should match fixture");
@@ -105,7 +109,56 @@ int test_parse_map_decode_terrain_success_and_allows_trailing_bytes() {
     return 1;
   }
 
-  return assert_true(map.overlay_tile_count == 4, "full parse should preserve header metadata");
+  if (assert_true(map.overlay_tile_count == 4, "full parse should preserve header metadata") != 0) {
+    return 1;
+  }
+
+  if (assert_true(map.terrain_payload_offset == romulus::data::MapResource::kHeaderSize &&
+                      map.terrain_payload_size == 12,
+                  "full parse should record terrain payload range") != 0) {
+    return 1;
+  }
+
+  if (assert_true(map.overlay_payload_offset == romulus::data::MapResource::kHeaderSize + 12 &&
+                      map.overlay_payload_size == 4,
+                  "full parse should record overlay payload range") != 0) {
+    return 1;
+  }
+
+  if (assert_true(map.trailing_data_offset == romulus::data::MapResource::kHeaderSize + 12 + 4 &&
+                      map.trailing_data_size == 2,
+                  "full parse should record trailing undecoded range") != 0) {
+    return 1;
+  }
+
+  return assert_true(map.trailing_data_preview.size() == 2 && map.trailing_data_preview[0] == 0xFE &&
+                         map.trailing_data_preview[1] == 0xED,
+                     "full parse should preserve trailing preview bytes");
+}
+
+int test_parse_map_trailing_preview_is_limited() {
+  auto bytes = make_valid_map_bytes_fixture();
+  for (std::size_t i = 0; i < 20; ++i) {
+    bytes.push_back(static_cast<std::uint8_t>(0xA0 + i));
+  }
+
+  const auto parsed = romulus::data::parse_caesar2_map(bytes);
+  if (assert_true(parsed.ok(), "valid map with long trailing bytes should decode") != 0) {
+    return 1;
+  }
+
+  const auto& map = parsed.value.value();
+  if (assert_true(map.trailing_data_size == 20, "trailing size should include all undecoded bytes") != 0) {
+    return 1;
+  }
+
+  if (assert_true(map.trailing_data_preview.size() == romulus::data::MapResource::kTrailingPreviewSize,
+                  "trailing preview should be capped to fixed preview size") != 0) {
+    return 1;
+  }
+
+  return assert_true(map.trailing_data_preview.front() == 0xA0 && map.trailing_data_preview.back() == 0xAF,
+                     "trailing preview should contain the first N undecoded bytes");
 }
 
 int test_parse_map_rejects_truncated_terrain_payload() {
@@ -231,6 +284,22 @@ int test_map_report() {
                   "report should include decoded overlay summary") != 0) {
     return 1;
   }
+  if (assert_true(report.find("terrain_payload_range: offset=28, size=12") != std::string::npos,
+                  "report should include terrain range") != 0) {
+    return 1;
+  }
+  if (assert_true(report.find("overlay_payload_range: offset=40, size=4") != std::string::npos,
+                  "report should include overlay range") != 0) {
+    return 1;
+  }
+  if (assert_true(report.find("trailing_undecoded: offset=44, size=0 bytes") != std::string::npos,
+                  "report should include trailing undecoded summary") != 0) {
+    return 1;
+  }
+  if (assert_true(report.find("trailing_preview[0..-1]: (empty)") != std::string::npos,
+                  "report should include empty trailing preview") != 0) {
+    return 1;
+  }
 
   if (assert_true(report.find("terrain_sample[0..7]: 0, 1, 2, 3, 4, 5, 7, 9") != std::string::npos,
                   "report should include terrain sample values") != 0) {
@@ -253,6 +322,10 @@ int main() {
   }
 
   if (test_parse_map_rejects_truncated_terrain_payload() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_parse_map_trailing_preview_is_limited() != 0) {
     return EXIT_FAILURE;
   }
 
