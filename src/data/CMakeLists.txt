@@ -7,6 +7,7 @@ add_library(romulus_data
   src/palette.cpp
   src/indexed_image.cpp
   src/image_export.cpp
+  src/map_resource.cpp
 )
 add_library(romulus::data ALIAS romulus_data)
 
