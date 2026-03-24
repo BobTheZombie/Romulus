@@ -13,3 +13,11 @@ add_test(NAME romulus_file_inventory_tests COMMAND romulus_file_inventory_tests)
 add_executable(romulus_binary_reader_tests data/binary_reader_tests.cpp)
 target_link_libraries(romulus_binary_reader_tests PRIVATE romulus::data)
 add_test(NAME romulus_binary_reader_tests COMMAND romulus_binary_reader_tests)
+
+add_executable(romulus_file_loader_tests data/file_loader_tests.cpp)
+target_link_libraries(romulus_file_loader_tests PRIVATE romulus::data)
+add_test(NAME romulus_file_loader_tests COMMAND romulus_file_loader_tests)
+
+add_executable(romulus_binary_probe_tests data/binary_probe_tests.cpp)
+target_link_libraries(romulus_binary_probe_tests PRIVATE romulus::data)
+add_test(NAME romulus_binary_probe_tests COMMAND romulus_binary_probe_tests)
