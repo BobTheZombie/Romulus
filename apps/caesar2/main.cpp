@@ -1,16 +1,21 @@
 #include <filesystem>
+#include <fstream>
+#include <iostream>
 #include <optional>
 #include <string>
 #include <string_view>
 
 #include "romulus/core/logger.h"
 #include "romulus/data/data_root.h"
+#include "romulus/data/file_inventory.h"
 #include "romulus/platform/application.h"
 
 namespace {
 
 struct ParsedArguments {
   bool smoke_test = false;
+  bool inventory_manifest = false;
+  std::optional<std::string> inventory_manifest_out;
   std::optional<std::string> data_dir;
 };
 
@@ -35,11 +40,64 @@ struct ParsedArguments {
       continue;
     }
 
+    if (argument == "--inventory-manifest") {
+      parsed.inventory_manifest = true;
+      continue;
+    }
+
+    if (argument == "--manifest-out") {
+      if (index + 1 >= argc) {
+        romulus::core::log_error("Missing value after --manifest-out.");
+        return std::nullopt;
+      }
+
+      parsed.inventory_manifest_out = argv[++index];
+      continue;
+    }
+
     romulus::core::log_error(std::string("Unknown argument: ") + std::string(argument));
     return std::nullopt;
   }
 
+  if (parsed.inventory_manifest_out.has_value() && !parsed.inventory_manifest) {
+    romulus::core::log_error("--manifest-out requires --inventory-manifest.");
+    return std::nullopt;
+  }
+
   return parsed;
+}
+
+int run_manifest_generation(const std::filesystem::path& data_root, const std::optional<std::string>& output_path) {
+  const auto validation = romulus::data::validate_data_root(data_root);
+  if (!validation.ok) {
+    romulus::core::log_error(romulus::data::format_validation_error(validation));
+    return 1;
+  }
+
+  const auto manifest = romulus::data::build_file_inventory(data_root);
+  const auto manifest_text = romulus::data::format_file_inventory_manifest(manifest);
+
+  if (!output_path.has_value()) {
+    std::cout << manifest_text;
+    return 0;
+  }
+
+  std::ofstream stream(*output_path);
+  if (!stream.is_open()) {
+    romulus::core::log_error("Failed to open manifest output path: " + *output_path);
+    return 1;
+  }
+
+  stream << manifest_text;
+  stream.close();
+
+  if (!stream.good()) {
+    romulus::core::log_error("Failed to write manifest output path: " + *output_path);
+    return 1;
+  }
+
+  romulus::core::log_info("Wrote manifest to: " + *output_path);
+  return 0;
 }
 
 }  // namespace
@@ -47,13 +105,18 @@ struct ParsedArguments {
 int main(int argc, char* argv[]) {
   const auto parsed = parse_arguments(argc, argv);
   if (!parsed.has_value()) {
-    romulus::core::log_error("Usage: caesar2 [--smoke-test] [--data-dir <path>]");
+    romulus::core::log_error(
+        "Usage: caesar2 [--smoke-test] [--data-dir <path>] [--inventory-manifest] [--manifest-out <path>]");
     return 1;
   }
 
   const std::filesystem::path data_root = parsed->data_dir.has_value()
                                               ? romulus::data::resolve_data_root(parsed->data_dir.value())
                                               : romulus::data::resolve_data_root(".");
+
+  if (parsed->inventory_manifest) {
+    return run_manifest_generation(data_root, parsed->inventory_manifest_out);
+  }
 
   romulus::platform::Application app({
       .smoke_test = parsed->smoke_test,
