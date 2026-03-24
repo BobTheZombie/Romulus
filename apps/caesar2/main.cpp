@@ -8,8 +8,8 @@
 #include "romulus/core/logger.h"
 #include "romulus/data/binary_probe.h"
 #include "romulus/data/data_root.h"
-#include "romulus/data/file_loader.h"
 #include "romulus/data/file_inventory.h"
+#include "romulus/data/file_loader.h"
 #include "romulus/data/image_export.h"
 #include "romulus/data/indexed_image.h"
 #include "romulus/data/palette.h"
@@ -25,6 +25,8 @@ struct ParsedArguments {
   std::optional<std::string> export_tile_file;
   std::optional<std::string> export_palette_file;
   std::optional<std::string> export_output_file;
+  std::optional<std::string> view_tile_file;
+  std::optional<std::string> view_palette_file;
   bool index_zero_transparent = false;
   std::optional<std::string> data_dir;
 };
@@ -105,6 +107,26 @@ struct ParsedArguments {
       continue;
     }
 
+    if (argument == "--view-tile-file") {
+      if (index + 1 >= argc) {
+        romulus::core::log_error("Missing value after --view-tile-file.");
+        return std::nullopt;
+      }
+
+      parsed.view_tile_file = argv[++index];
+      continue;
+    }
+
+    if (argument == "--view-palette-file") {
+      if (index + 1 >= argc) {
+        romulus::core::log_error("Missing value after --view-palette-file.");
+        return std::nullopt;
+      }
+
+      parsed.view_palette_file = argv[++index];
+      continue;
+    }
+
     if (argument == "--index-zero-transparent") {
       parsed.index_zero_transparent = true;
       continue;
@@ -119,8 +141,8 @@ struct ParsedArguments {
     return std::nullopt;
   }
 
-  const bool has_any_export_arg =
-      parsed.export_tile_file.has_value() || parsed.export_palette_file.has_value() || parsed.export_output_file.has_value();
+  const bool has_any_export_arg = parsed.export_tile_file.has_value() || parsed.export_palette_file.has_value() ||
+                                  parsed.export_output_file.has_value();
   if (has_any_export_arg) {
     if (!parsed.export_tile_file.has_value() || !parsed.export_palette_file.has_value() ||
         !parsed.export_output_file.has_value()) {
@@ -130,14 +152,75 @@ struct ParsedArguments {
     }
   }
 
+  const bool has_any_view_arg = parsed.view_tile_file.has_value() || parsed.view_palette_file.has_value();
+  if (has_any_view_arg) {
+    if (!parsed.view_tile_file.has_value() || !parsed.view_palette_file.has_value()) {
+      romulus::core::log_error("Image viewer requires --view-tile-file and --view-palette-file.");
+      return std::nullopt;
+    }
+  }
+
+  if (has_any_export_arg && has_any_view_arg) {
+    romulus::core::log_error("Image export and image viewer modes are mutually exclusive.");
+    return std::nullopt;
+  }
+
   return parsed;
 }
 
-int run_binary_probe(const std::filesystem::path& data_root, const std::string& probe_file_arg) {
-  std::filesystem::path candidate = probe_file_arg;
+[[nodiscard]] std::filesystem::path resolve_data_relative(const std::filesystem::path& data_root,
+                                                          const std::string& path_argument) {
+  std::filesystem::path candidate = path_argument;
   if (candidate.is_relative()) {
     candidate = data_root / candidate;
   }
+
+  return candidate;
+}
+
+[[nodiscard]] std::optional<romulus::data::RgbaImage> decode_tile_image_to_rgba(const std::filesystem::path& data_root,
+                                                                                 const std::string& tile_file_arg,
+                                                                                 const std::string& palette_file_arg,
+                                                                                 bool index_zero_transparent) {
+  const auto tile_path = resolve_data_relative(data_root, tile_file_arg);
+  const auto palette_path = resolve_data_relative(data_root, palette_file_arg);
+
+  const auto tile_loaded = romulus::data::load_file_to_memory(tile_path);
+  if (!tile_loaded.ok()) {
+    romulus::core::log_error(tile_loaded.error.value().message);
+    return std::nullopt;
+  }
+
+  const auto palette_loaded = romulus::data::load_file_to_memory(palette_path);
+  if (!palette_loaded.ok()) {
+    romulus::core::log_error(palette_loaded.error.value().message);
+    return std::nullopt;
+  }
+
+  const auto parsed_tile = romulus::data::parse_caesar2_simple_indexed_tile(tile_loaded.value.value().bytes);
+  if (!parsed_tile.ok()) {
+    romulus::core::log_error(parsed_tile.error->message);
+    return std::nullopt;
+  }
+
+  const auto parsed_palette = romulus::data::parse_palette_resource(palette_loaded.value.value().bytes);
+  if (!parsed_palette.ok()) {
+    romulus::core::log_error(parsed_palette.error->message);
+    return std::nullopt;
+  }
+
+  const auto rgba_image = romulus::data::apply_palette_to_indexed_image(
+      parsed_tile.value.value(), parsed_palette.value.value(), index_zero_transparent);
+  if (!rgba_image.ok()) {
+    romulus::core::log_error(rgba_image.error->message);
+    return std::nullopt;
+  }
+
+  return rgba_image.value.value();
+}
+
+int run_binary_probe(const std::filesystem::path& data_root, const std::string& probe_file_arg) {
+  const auto candidate = resolve_data_relative(data_root, probe_file_arg);
 
   const auto loaded = romulus::data::load_file_to_memory(candidate);
   if (!loaded.ok()) {
@@ -188,53 +271,14 @@ int run_tile_export(const std::filesystem::path& data_root,
                     const std::string& palette_file_arg,
                     const std::string& output_file_arg,
                     bool index_zero_transparent) {
-  std::filesystem::path tile_path = tile_file_arg;
-  if (tile_path.is_relative()) {
-    tile_path = data_root / tile_path;
-  }
+  const auto output_path = resolve_data_relative(data_root, output_file_arg);
 
-  std::filesystem::path palette_path = palette_file_arg;
-  if (palette_path.is_relative()) {
-    palette_path = data_root / palette_path;
-  }
-
-  std::filesystem::path output_path = output_file_arg;
-  if (output_path.is_relative()) {
-    output_path = data_root / output_path;
-  }
-
-  const auto tile_loaded = romulus::data::load_file_to_memory(tile_path);
-  if (!tile_loaded.ok()) {
-    romulus::core::log_error(tile_loaded.error.value().message);
+  const auto decoded = decode_tile_image_to_rgba(data_root, tile_file_arg, palette_file_arg, index_zero_transparent);
+  if (!decoded.has_value()) {
     return 1;
   }
 
-  const auto palette_loaded = romulus::data::load_file_to_memory(palette_path);
-  if (!palette_loaded.ok()) {
-    romulus::core::log_error(palette_loaded.error.value().message);
-    return 1;
-  }
-
-  const auto parsed_tile = romulus::data::parse_caesar2_simple_indexed_tile(tile_loaded.value.value().bytes);
-  if (!parsed_tile.ok()) {
-    romulus::core::log_error(parsed_tile.error->message);
-    return 1;
-  }
-
-  const auto parsed_palette = romulus::data::parse_palette_resource(palette_loaded.value.value().bytes);
-  if (!parsed_palette.ok()) {
-    romulus::core::log_error(parsed_palette.error->message);
-    return 1;
-  }
-
-  const auto rgba_image =
-      romulus::data::apply_palette_to_indexed_image(parsed_tile.value.value(), parsed_palette.value.value(), index_zero_transparent);
-  if (!rgba_image.ok()) {
-    romulus::core::log_error(rgba_image.error->message);
-    return 1;
-  }
-
-  const auto export_result = romulus::data::export_rgba_image_as_ppm(rgba_image.value.value(), output_path);
+  const auto export_result = romulus::data::export_rgba_image_as_ppm(decoded.value(), output_path);
   if (!export_result.ok()) {
     romulus::core::log_error(export_result.error->message);
     return 1;
@@ -242,6 +286,25 @@ int run_tile_export(const std::filesystem::path& data_root,
 
   romulus::core::log_info("Exported decoded tile to: " + output_path.string());
   return 0;
+}
+
+int run_tile_viewer(const std::filesystem::path& data_root,
+                    const std::string& tile_file_arg,
+                    const std::string& palette_file_arg,
+                    bool smoke_test,
+                    bool index_zero_transparent) {
+  const auto decoded = decode_tile_image_to_rgba(data_root, tile_file_arg, palette_file_arg, index_zero_transparent);
+  if (!decoded.has_value()) {
+    return 1;
+  }
+
+  romulus::platform::Application app({
+      .smoke_test = smoke_test,
+      .data_root = data_root,
+      .debug_view_image = decoded,
+  });
+
+  return app.run();
 }
 
 }  // namespace
@@ -252,6 +315,7 @@ int main(int argc, char* argv[]) {
     romulus::core::log_error(
         "Usage: caesar2 [--smoke-test] [--data-dir <path>] [--inventory-manifest] [--manifest-out <path>] "
         "[--probe-file <path>] [--export-tile-file <path> --export-palette-file <path> --export-output <path> "
+        "[--index-zero-transparent]] [--view-tile-file <path> --view-palette-file <path> "
         "[--index-zero-transparent]]");
     return 1;
   }
@@ -273,6 +337,14 @@ int main(int argc, char* argv[]) {
                            parsed->export_tile_file.value(),
                            parsed->export_palette_file.value(),
                            parsed->export_output_file.value(),
+                           parsed->index_zero_transparent);
+  }
+
+  if (parsed->view_tile_file.has_value()) {
+    return run_tile_viewer(data_root,
+                           parsed->view_tile_file.value(),
+                           parsed->view_palette_file.value(),
+                           parsed->smoke_test,
                            parsed->index_zero_transparent);
   }
 
