@@ -6,13 +6,12 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+enable_testing()
+
 find_package(SDL2 REQUIRED)
 
 add_subdirectory(src/core)
-
-add_library(romulus_platform INTERFACE)
-add_library(romulus::platform ALIAS romulus_platform)
-target_include_directories(romulus_platform INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_subdirectory(src/platform)
 
 add_library(romulus_render INTERFACE)
 add_library(romulus::render ALIAS romulus_render)
@@ -34,7 +33,7 @@ add_executable(caesar2 apps/caesar2/main.cpp)
 target_link_libraries(
   caesar2
   PRIVATE
-    romulus::core
-    SDL2::SDL2
+    romulus::platform
 )
-target_include_directories(caesar2 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core/include)
+
+add_subdirectory(tests)
