@@ -8,6 +8,7 @@ namespace romulus::data {
 enum class ParseErrorCode {
   OutOfBounds,
   InvalidSeek,
+  InvalidFormat,
 };
 
 struct ParseError {
@@ -20,5 +21,9 @@ struct ParseError {
 
 [[nodiscard]] ParseError make_out_of_bounds_error(std::size_t offset, std::size_t requested_bytes, std::size_t buffer_size);
 [[nodiscard]] ParseError make_invalid_seek_error(std::size_t requested_offset, std::size_t buffer_size);
+[[nodiscard]] ParseError make_invalid_format_error(std::size_t offset,
+                                                   std::size_t requested_bytes,
+                                                   std::size_t buffer_size,
+                                                   const std::string& message);
 
 }  // namespace romulus::data

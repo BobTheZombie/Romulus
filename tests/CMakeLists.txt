@@ -21,3 +21,7 @@ add_test(NAME romulus_file_loader_tests COMMAND romulus_file_loader_tests)
 add_executable(romulus_binary_probe_tests data/binary_probe_tests.cpp)
 target_link_libraries(romulus_binary_probe_tests PRIVATE romulus::data)
 add_test(NAME romulus_binary_probe_tests COMMAND romulus_binary_probe_tests)
+
+add_executable(romulus_palette_tests data/palette_tests.cpp)
+target_link_libraries(romulus_palette_tests PRIVATE romulus::data)
+add_test(NAME romulus_palette_tests COMMAND romulus_palette_tests)
