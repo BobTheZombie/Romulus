@@ -33,6 +33,8 @@ std::vector<std::uint8_t> make_valid_map_bytes_fixture() {
 
   const std::array<std::uint8_t, 12> terrain = {0, 1, 2, 3, 4, 5, 7, 9, 11, 13, 17, 21};
   bytes.insert(bytes.end(), terrain.begin(), terrain.end());
+  const std::array<std::uint8_t, 4> overlay = {42, 84, 126, 168};
+  bytes.insert(bytes.end(), overlay.begin(), overlay.end());
 
   return bytes;
 }
@@ -67,6 +69,9 @@ int test_parse_map_header_success() {
   if (assert_true(map.terrain_tiles.empty(), "header-only parse should not decode terrain payload") != 0) {
     return 1;
   }
+  if (assert_true(map.overlay_tiles.empty(), "header-only parse should not decode overlay payload") != 0) {
+    return 1;
+  }
 
   return assert_true(map.flags == 0x12345678 && map.random_seed == 0x11223344,
                      "metadata fields should match fixture");
@@ -86,9 +91,17 @@ int test_parse_map_decode_terrain_success_and_allows_trailing_bytes() {
   if (assert_true(map.terrain_tiles.size() == 12, "decoded terrain tile count should match header") != 0) {
     return 1;
   }
+  if (assert_true(map.overlay_tiles.size() == 4, "decoded overlay tile count should match header") != 0) {
+    return 1;
+  }
 
   if (assert_true(map.terrain_tiles[0] == 0 && map.terrain_tiles[5] == 5 && map.terrain_tiles[11] == 21,
                   "decoded terrain values should preserve payload bytes") != 0) {
+    return 1;
+  }
+
+  if (assert_true(map.overlay_tiles[0] == 42 && map.overlay_tiles[3] == 168,
+                  "decoded overlay values should preserve payload bytes") != 0) {
     return 1;
   }
 
@@ -97,7 +110,7 @@ int test_parse_map_decode_terrain_success_and_allows_trailing_bytes() {
 
 int test_parse_map_rejects_truncated_terrain_payload() {
   auto bytes = make_valid_map_bytes_fixture();
-  bytes.pop_back();
+  bytes.resize(romulus::data::MapResource::kHeaderSize + 11);
 
   const auto parsed = romulus::data::parse_caesar2_map(bytes);
   if (assert_true(!parsed.ok(), "truncated terrain payload should fail") != 0) {
@@ -111,6 +124,25 @@ int test_parse_map_rejects_truncated_terrain_payload() {
 
   return assert_true(parsed.error.has_value() && parsed.error->offset == romulus::data::MapResource::kHeaderSize,
                      "truncated terrain payload should fail at terrain payload start");
+}
+
+int test_parse_map_rejects_truncated_overlay_payload() {
+  auto bytes = make_valid_map_bytes_fixture();
+  bytes.pop_back();
+
+  const auto parsed = romulus::data::parse_caesar2_map(bytes);
+  if (assert_true(!parsed.ok(), "truncated overlay payload should fail") != 0) {
+    return 1;
+  }
+
+  if (assert_true(parsed.error.has_value() && parsed.error->code == romulus::data::ParseErrorCode::OutOfBounds,
+                  "truncated overlay payload should map to out-of-bounds") != 0) {
+    return 1;
+  }
+
+  constexpr std::size_t kExpectedOverlayOffset = romulus::data::MapResource::kHeaderSize + 12;
+  return assert_true(parsed.error.has_value() && parsed.error->offset == kExpectedOverlayOffset,
+                     "truncated overlay payload should fail at overlay payload start");
 }
 
 int test_parse_map_rejects_header_count_mismatch() {
@@ -195,9 +227,18 @@ int test_map_report() {
                   "report should include decoded terrain summary") != 0) {
     return 1;
   }
+  if (assert_true(report.find("overlay_payload_decoded: 4 bytes") != std::string::npos,
+                  "report should include decoded overlay summary") != 0) {
+    return 1;
+  }
 
-  return assert_true(report.find("terrain_sample[0..7]: 0, 1, 2, 3, 4, 5, 7, 9") != std::string::npos,
-                     "report should include terrain sample values");
+  if (assert_true(report.find("terrain_sample[0..7]: 0, 1, 2, 3, 4, 5, 7, 9") != std::string::npos,
+                  "report should include terrain sample values") != 0) {
+    return 1;
+  }
+
+  return assert_true(report.find("overlay_sample[0..3]: 42, 84, 126, 168") != std::string::npos,
+                     "report should include overlay sample values");
 }
 
 }  // namespace
@@ -212,6 +253,10 @@ int main() {
   }
 
   if (test_parse_map_rejects_truncated_terrain_payload() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_parse_map_rejects_truncated_overlay_payload() != 0) {
     return EXIT_FAILURE;
   }
 
