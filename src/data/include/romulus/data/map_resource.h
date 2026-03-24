@@ -13,6 +13,7 @@ namespace romulus::data {
 struct MapResource {
   static constexpr std::size_t kHeaderSize = 28;
   static constexpr std::uint16_t kMaxDimension = 4096;
+  static constexpr std::size_t kTrailingPreviewSize = 16;
 
   std::uint16_t format_version = 0;
   std::uint16_t header_size = 0;
@@ -22,6 +23,13 @@ struct MapResource {
   std::uint32_t overlay_tile_count = 0;
   std::uint32_t flags = 0;
   std::uint32_t random_seed = 0;
+  std::size_t terrain_payload_offset = 0;
+  std::size_t terrain_payload_size = 0;
+  std::size_t overlay_payload_offset = 0;
+  std::size_t overlay_payload_size = 0;
+  std::size_t trailing_data_offset = 0;
+  std::size_t trailing_data_size = 0;
+  std::vector<std::uint8_t> trailing_data_preview;
   std::vector<std::uint8_t> terrain_tiles;
   std::vector<std::uint8_t> overlay_tiles;
 };
