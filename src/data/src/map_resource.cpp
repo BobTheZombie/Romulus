@@ -3,6 +3,7 @@
 #include <array>
 #include <limits>
 #include <sstream>
+#include <utility>
 
 namespace romulus::data {
 namespace {
@@ -41,20 +42,50 @@ namespace {
 }
 
 [[nodiscard]] ParseResult<std::size_t> checked_payload_size(std::uint32_t terrain_tile_count,
+                                                            std::size_t section_offset,
+                                                            const char* section_name,
                                                             std::size_t buffer_size) {
   const auto count_wide = static_cast<std::uint64_t>(terrain_tile_count);
   constexpr std::uint64_t kTileByteSize = sizeof(std::uint8_t);
   const auto payload_wide = count_wide * kTileByteSize;
 
   if (payload_wide > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+    std::ostringstream message;
+    message << section_name << " payload size exceeds host size limits";
+
     return {.error = make_invalid_map_error(
-                MapResource::kHeaderSize,
+                section_offset,
                 sizeof(std::uint8_t),
                 buffer_size,
-                "Terrain payload size exceeds host size limits")};
+                message.str())};
   }
 
   return {.value = static_cast<std::size_t>(payload_wide)};
+}
+
+[[nodiscard]] ParseResult<std::vector<std::uint8_t>> parse_tile_payload(BinaryReader& reader,
+                                                                        std::uint32_t tile_count,
+                                                                        std::size_t section_offset,
+                                                                        const char* section_name,
+                                                                        std::size_t buffer_size) {
+  const auto payload_size = checked_payload_size(tile_count, section_offset, section_name, buffer_size);
+  if (!payload_size.ok()) {
+    return {.error = payload_size.error};
+  }
+
+  const auto payload_bytes = reader.read_bytes(payload_size.value.value());
+  if (!payload_bytes.ok()) {
+    return {.error = payload_bytes.error};
+  }
+
+  std::vector<std::uint8_t> payload;
+  const auto source = payload_bytes.value.value();
+  payload.reserve(source.size());
+  for (const auto byte : source) {
+    payload.push_back(std::to_integer<std::uint8_t>(byte));
+  }
+
+  return {.value = payload};
 }
 
 }  // namespace
@@ -175,27 +206,44 @@ ParseResult<MapResource> parse_caesar2_map(std::span<const std::byte> bytes) {
 
   MapResource map = parsed_header.value.value();
 
-  const auto payload_size = checked_payload_size(map.terrain_tile_count, bytes.size());
-  if (!payload_size.ok()) {
-    return {.error = payload_size.error};
-  }
-
   BinaryReader reader(bytes);
   const auto seek_error = reader.seek(MapResource::kHeaderSize);
   if (seek_error.has_value()) {
     return {.error = seek_error};
   }
 
-  const auto terrain_bytes = reader.read_bytes(payload_size.value.value());
-  if (!terrain_bytes.ok()) {
-    return {.error = terrain_bytes.error};
+  const auto terrain_tiles = parse_tile_payload(
+      reader,
+      map.terrain_tile_count,
+      MapResource::kHeaderSize,
+      "Terrain",
+      bytes.size());
+  if (!terrain_tiles.ok()) {
+    return {.error = terrain_tiles.error};
   }
+  map.terrain_tiles = std::move(terrain_tiles.value.value());
 
-  const auto source = terrain_bytes.value.value();
-  map.terrain_tiles.reserve(source.size());
-  for (const auto byte : source) {
-    map.terrain_tiles.push_back(std::to_integer<std::uint8_t>(byte));
+  const auto overlay_offset_wide =
+      static_cast<std::uint64_t>(MapResource::kHeaderSize) + static_cast<std::uint64_t>(map.terrain_tiles.size());
+  if (overlay_offset_wide > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+    return {.error = make_invalid_map_error(
+                MapResource::kHeaderSize,
+                sizeof(std::uint8_t),
+                bytes.size(),
+                "Overlay payload offset exceeds host size limits")};
   }
+  const auto overlay_offset = static_cast<std::size_t>(overlay_offset_wide);
+
+  const auto overlay_tiles = parse_tile_payload(
+      reader,
+      map.overlay_tile_count,
+      overlay_offset,
+      "Overlay",
+      bytes.size());
+  if (!overlay_tiles.ok()) {
+    return {.error = overlay_tiles.error};
+  }
+  map.overlay_tiles = std::move(overlay_tiles.value.value());
 
   return {.value = map};
 }
@@ -217,6 +265,7 @@ std::string format_map_report(const MapResource& map) {
   output << "flags: 0x" << std::hex << map.flags << std::dec << "\n";
   output << "random_seed: " << map.random_seed << "\n";
   output << "terrain_payload_decoded: " << map.terrain_tiles.size() << " bytes\n";
+  output << "overlay_payload_decoded: " << map.overlay_tiles.size() << " bytes\n";
 
   constexpr std::size_t kSampleSize = 8;
   const auto sample_count = map.terrain_tiles.size() < kSampleSize ? map.terrain_tiles.size() : kSampleSize;
@@ -232,6 +281,22 @@ std::string format_map_report(const MapResource& map) {
       output << ", ";
     }
     output << static_cast<unsigned int>(map.terrain_tiles[i]);
+  }
+  output << "\n";
+
+  const auto overlay_sample_count = map.overlay_tiles.size() < kSampleSize ? map.overlay_tiles.size() : kSampleSize;
+  output << "overlay_sample[0..";
+  if (overlay_sample_count == 0) {
+    output << "-1]: (empty)\n";
+    return output.str();
+  }
+
+  output << (overlay_sample_count - 1) << "]: ";
+  for (std::size_t i = 0; i < overlay_sample_count; ++i) {
+    if (i > 0) {
+      output << ", ";
+    }
+    output << static_cast<unsigned int>(map.overlay_tiles[i]);
   }
   output << "\n";
 

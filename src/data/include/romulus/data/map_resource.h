@@ -23,6 +23,7 @@ struct MapResource {
   std::uint32_t flags = 0;
   std::uint32_t random_seed = 0;
   std::vector<std::uint8_t> terrain_tiles;
+  std::vector<std::uint8_t> overlay_tiles;
 };
 
 [[nodiscard]] ParseResult<MapResource> parse_caesar2_map_header(std::span<const std::byte> bytes);
