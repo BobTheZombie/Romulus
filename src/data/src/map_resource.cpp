@@ -1,6 +1,7 @@
 #include "romulus/data/map_resource.h"
 
 #include <array>
+#include <limits>
 #include <sstream>
 
 namespace romulus::data {
@@ -28,7 +29,32 @@ namespace {
                 "Map dimensions exceed supported bounds (max 4096x4096)")};
   }
 
-  return {.value = static_cast<std::size_t>(width) * static_cast<std::size_t>(height)};
+  const auto width_wide = static_cast<std::uint64_t>(width);
+  const auto height_wide = static_cast<std::uint64_t>(height);
+  const auto count_wide = width_wide * height_wide;
+
+  if (count_wide > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+    return {.error = make_invalid_map_error(8, 4, buffer_size, "Map tile count exceeds host size limits")};
+  }
+
+  return {.value = static_cast<std::size_t>(count_wide)};
+}
+
+[[nodiscard]] ParseResult<std::size_t> checked_payload_size(std::uint32_t terrain_tile_count,
+                                                            std::size_t buffer_size) {
+  const auto count_wide = static_cast<std::uint64_t>(terrain_tile_count);
+  constexpr std::uint64_t kTileByteSize = sizeof(std::uint8_t);
+  const auto payload_wide = count_wide * kTileByteSize;
+
+  if (payload_wide > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+    return {.error = make_invalid_map_error(
+                MapResource::kHeaderSize,
+                sizeof(std::uint8_t),
+                buffer_size,
+                "Terrain payload size exceeds host size limits")};
+  }
+
+  return {.value = static_cast<std::size_t>(payload_wide)};
 }
 
 }  // namespace
@@ -141,9 +167,47 @@ ParseResult<MapResource> parse_caesar2_map_header(std::span<const std::uint8_t> 
       std::span<const std::byte>(reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()));
 }
 
+ParseResult<MapResource> parse_caesar2_map(std::span<const std::byte> bytes) {
+  const auto parsed_header = parse_caesar2_map_header(bytes);
+  if (!parsed_header.ok()) {
+    return {.error = parsed_header.error};
+  }
+
+  MapResource map = parsed_header.value.value();
+
+  const auto payload_size = checked_payload_size(map.terrain_tile_count, bytes.size());
+  if (!payload_size.ok()) {
+    return {.error = payload_size.error};
+  }
+
+  BinaryReader reader(bytes);
+  const auto seek_error = reader.seek(MapResource::kHeaderSize);
+  if (seek_error.has_value()) {
+    return {.error = seek_error};
+  }
+
+  const auto terrain_bytes = reader.read_bytes(payload_size.value.value());
+  if (!terrain_bytes.ok()) {
+    return {.error = terrain_bytes.error};
+  }
+
+  const auto source = terrain_bytes.value.value();
+  map.terrain_tiles.reserve(source.size());
+  for (const auto byte : source) {
+    map.terrain_tiles.push_back(std::to_integer<std::uint8_t>(byte));
+  }
+
+  return {.value = map};
+}
+
+ParseResult<MapResource> parse_caesar2_map(std::span<const std::uint8_t> bytes) {
+  return parse_caesar2_map(
+      std::span<const std::byte>(reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()));
+}
+
 std::string format_map_report(const MapResource& map) {
   std::ostringstream output;
-  output << "# Caesar II Map Header Report\n";
+  output << "# Caesar II Map Report\n";
   output << "format_version: " << map.format_version << "\n";
   output << "header_size: " << map.header_size << "\n";
   output << "width: " << map.width << "\n";
@@ -152,6 +216,25 @@ std::string format_map_report(const MapResource& map) {
   output << "overlay_tile_count: " << map.overlay_tile_count << "\n";
   output << "flags: 0x" << std::hex << map.flags << std::dec << "\n";
   output << "random_seed: " << map.random_seed << "\n";
+  output << "terrain_payload_decoded: " << map.terrain_tiles.size() << " bytes\n";
+
+  constexpr std::size_t kSampleSize = 8;
+  const auto sample_count = map.terrain_tiles.size() < kSampleSize ? map.terrain_tiles.size() : kSampleSize;
+  output << "terrain_sample[0..";
+  if (sample_count == 0) {
+    output << "-1]: (empty)\n";
+    return output.str();
+  }
+
+  output << (sample_count - 1) << "]: ";
+  for (std::size_t i = 0; i < sample_count; ++i) {
+    if (i > 0) {
+      output << ", ";
+    }
+    output << static_cast<unsigned int>(map.terrain_tiles[i]);
+  }
+  output << "\n";
+
   return output.str();
 }
 
