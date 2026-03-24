@@ -1,9 +1,12 @@
 #pragma once
 
+#include <filesystem>
+
 namespace romulus::platform {
 
 struct ApplicationOptions {
   bool smoke_test = false;
+  std::filesystem::path data_root = ".";
 };
 
 class Application {
