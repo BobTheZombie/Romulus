@@ -1,6 +1,7 @@
 add_library(romulus_data
   src/data_root.cpp
   src/file_inventory.cpp
+  src/binary_reader.cpp
 )
 add_library(romulus::data ALIAS romulus_data)
 
