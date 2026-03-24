@@ -18,6 +18,19 @@ ParseError make_out_of_bounds_error(std::size_t offset, std::size_t requested_by
   return error;
 }
 
+ParseError make_invalid_format_error(std::size_t offset,
+                                    std::size_t requested_bytes,
+                                    std::size_t buffer_size,
+                                    const std::string& message) {
+  ParseError error;
+  error.code = ParseErrorCode::InvalidFormat;
+  error.offset = offset;
+  error.requested_bytes = requested_bytes;
+  error.buffer_size = buffer_size;
+  error.message = message;
+  return error;
+}
+
 ParseError make_invalid_seek_error(std::size_t requested_offset, std::size_t buffer_size) {
   std::ostringstream message;
   message << "Invalid seek: requested_offset=" << requested_offset << ", buffer_size=" << buffer_size;
