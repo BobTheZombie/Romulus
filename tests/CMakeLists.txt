@@ -1,3 +1,7 @@
 add_executable(romulus_timestep_tests core/timestep_tests.cpp)
 target_link_libraries(romulus_timestep_tests PRIVATE romulus::core)
 add_test(NAME romulus_timestep_tests COMMAND romulus_timestep_tests)
+
+add_executable(romulus_data_root_tests data/data_root_tests.cpp)
+target_link_libraries(romulus_data_root_tests PRIVATE romulus::data)
+add_test(NAME romulus_data_root_tests COMMAND romulus_data_root_tests)

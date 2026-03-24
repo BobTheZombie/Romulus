@@ -5,9 +5,11 @@
 #include <chrono>
 #include <cstddef>
 #include <string>
+#include <utility>
 
 #include "romulus/core/fixed_timestep_clock.h"
 #include "romulus/core/logger.h"
+#include "romulus/data/data_root.h"
 
 namespace romulus::platform {
 namespace {
@@ -18,10 +20,17 @@ constexpr auto kSmokeTestRuntime = std::chrono::milliseconds(50);
 constexpr auto kFixedStep = std::chrono::milliseconds(16);
 }  // namespace
 
-Application::Application(ApplicationOptions options) : options_(options) {}
+Application::Application(ApplicationOptions options) : options_(std::move(options)) {}
 
 int Application::run() {
+  const auto validation = romulus::data::validate_data_root(options_.data_root);
+  if (!validation.ok) {
+    romulus::core::log_error(romulus::data::format_validation_error(validation));
+    return 1;
+  }
+
   romulus::core::log_info("Starting Caesar II Reimplementation.");
+  romulus::core::log_info(std::string("Using Caesar II data root: ") + options_.data_root.string());
 
   if (SDL_Init(SDL_INIT_VIDEO) != 0) {
     romulus::core::log_error(std::string("SDL_Init failed: ") + SDL_GetError());

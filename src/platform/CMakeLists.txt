@@ -11,5 +11,6 @@ target_link_libraries(
   romulus_platform
   PUBLIC
     romulus::core
+    romulus::data
     SDL2::SDL2
 )
