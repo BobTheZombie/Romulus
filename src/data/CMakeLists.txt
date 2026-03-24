@@ -5,6 +5,7 @@ add_library(romulus_data
   src/file_loader.cpp
   src/binary_probe.cpp
   src/palette.cpp
+  src/indexed_image.cpp
 )
 add_library(romulus::data ALIAS romulus_data)
 
