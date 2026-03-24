@@ -33,3 +33,7 @@ add_test(NAME romulus_indexed_image_tests COMMAND romulus_indexed_image_tests)
 add_executable(romulus_image_export_tests data/image_export_tests.cpp)
 target_link_libraries(romulus_image_export_tests PRIVATE romulus::data)
 add_test(NAME romulus_image_export_tests COMMAND romulus_image_export_tests)
+
+add_executable(romulus_viewer_tests platform/viewer_tests.cpp)
+target_link_libraries(romulus_viewer_tests PRIVATE romulus::platform)
+add_test(NAME romulus_viewer_tests COMMAND romulus_viewer_tests)
