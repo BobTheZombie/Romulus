@@ -49,6 +49,7 @@ struct ParsedArguments {
   std::optional<std::string> view_lbm_file;
   bool probe_win95_data = false;
   std::optional<std::string> probe_win95_container_file;
+  bool probe_win95_container_entries_all = false;
   bool index_zero_transparent = false;
   std::optional<std::string> data_dir;
 };
@@ -274,6 +275,11 @@ struct ParsedArguments {
       continue;
     }
 
+    if (argument == "--probe-win95-container-entries-all") {
+      parsed.probe_win95_container_entries_all = true;
+      continue;
+    }
+
     romulus::core::log_error(std::string("Unknown argument: ") + std::string(argument));
     return std::nullopt;
   }
@@ -454,6 +460,11 @@ struct ParsedArguments {
       romulus::core::log_error("--probe-win95-container is mutually exclusive with other command modes.");
       return std::nullopt;
     }
+  }
+
+  if (parsed.probe_win95_container_entries_all && !parsed.probe_win95_container_file.has_value()) {
+    romulus::core::log_error("--probe-win95-container-entries-all requires --probe-win95-container.");
+    return std::nullopt;
   }
 
   return parsed;
@@ -747,14 +758,22 @@ int run_win95_data_probe(const std::filesystem::path& data_root) {
   return 0;
 }
 
-int run_win95_container_probe(const std::filesystem::path& data_root, const std::string& candidate_arg) {
+int run_win95_container_probe(const std::filesystem::path& data_root,
+                              const std::string& candidate_arg,
+                              const bool include_all_entries) {
   const auto result = romulus::data::probe_win95_data_container_file(data_root, candidate_arg);
   if (!result.ok()) {
     romulus::core::log_error(result.error.value().message);
     return 1;
   }
 
-  std::cout << romulus::data::format_win95_data_container_report(result.value.value(), candidate_arg);
+  std::cout << romulus::data::format_win95_data_container_report(
+      result.value.value(),
+      candidate_arg,
+      romulus::data::Win95PackReportOptions{
+          .preview_entry_limit = 8,
+          .include_all_entries = include_all_entries,
+      });
   return 0;
 }
 
@@ -829,6 +848,7 @@ int main(int argc, char* argv[]) {
         "[--probe-exe-resource-payloads <path>] "
         "[--probe-win95-data] "
         "[--probe-win95-container <path>] "
+        "[--probe-win95-container-entries-all] "
         "[--export-lbm-file <path> --export-output <path>] "
         "[--view-lbm-file <path>] "
         "[--classify-candidate <path> ...] [--classify-include-secondary] "
@@ -899,7 +919,9 @@ int main(int argc, char* argv[]) {
   }
 
   if (parsed->probe_win95_container_file.has_value()) {
-    return run_win95_container_probe(data_root, parsed->probe_win95_container_file.value());
+    return run_win95_container_probe(data_root,
+                                     parsed->probe_win95_container_file.value(),
+                                     parsed->probe_win95_container_entries_all);
   }
 
   if (parsed->export_lbm_file.has_value()) {
