@@ -14,6 +14,53 @@ struct PeImportDescriptor {
   std::vector<std::string> imported_functions;
 };
 
+struct PeResourceDirectoryEntry {
+  std::uint32_t raw_name_or_id = 0;
+  bool uses_string_name = false;
+  std::string string_name;
+  std::uint32_t numeric_id = 0;
+  bool points_to_subdirectory = false;
+  std::uint32_t child_offset = 0;
+};
+
+struct PeResourceLeaf {
+  std::uint32_t type_id = 0;
+  std::string type_label;
+  bool type_uses_string_name = false;
+  std::string type_string_name;
+  std::uint32_t name_id = 0;
+  bool name_uses_string_name = false;
+  std::string name_string;
+  std::uint32_t language_id = 0;
+  std::uint32_t data_rva = 0;
+  std::uint32_t data_size = 0;
+  std::size_t data_file_offset = 0;
+};
+
+struct PeResourceTypeSummary {
+  std::uint32_t type_id = 0;
+  std::string type_label;
+  bool type_uses_string_name = false;
+  std::string type_string_name;
+  std::size_t entry_count = 0;
+  std::size_t leaf_count = 0;
+};
+
+struct PeResourceTree {
+  std::vector<PeResourceDirectoryEntry> top_level_entries;
+  std::vector<PeResourceLeaf> leaves;
+};
+
+struct PeResourceSectionReport {
+  bool has_resources = false;
+  std::uint32_t resource_rva = 0;
+  std::uint32_t resource_size = 0;
+  std::size_t top_level_type_count = 0;
+  std::size_t leaf_count = 0;
+  std::vector<PeResourceTypeSummary> per_type_summary;
+  PeResourceTree tree;
+};
+
 struct PeExeResource {
   std::uint32_t image_base = 0;
   std::uint32_t entry_point_rva = 0;
@@ -23,10 +70,12 @@ struct PeExeResource {
   bool has_resources = false;
   bool has_relocations = false;
   std::vector<PeImportDescriptor> imports;
+  PeResourceSectionReport resource_report;
 };
 
 [[nodiscard]] ParseResult<PeExeResource> parse_pe_exe_resource(std::span<const std::byte> bytes);
 [[nodiscard]] ParseResult<PeExeResource> parse_pe_exe_resource(std::span<const std::uint8_t> bytes);
 [[nodiscard]] std::string format_pe_exe_report(const PeExeResource& resource);
+[[nodiscard]] std::string format_pe_resource_report(const PeResourceSectionReport& resource_report);
 
 }  // namespace romulus::data
