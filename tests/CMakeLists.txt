@@ -66,6 +66,10 @@ add_executable(romulus_batch_classification_tests data/batch_classification_test
 target_link_libraries(romulus_batch_classification_tests PRIVATE romulus::data)
 add_test(NAME romulus_batch_classification_tests COMMAND romulus_batch_classification_tests)
 
+add_executable(romulus_win95_data_probe_tests data/win95_data_probe_tests.cpp)
+target_link_libraries(romulus_win95_data_probe_tests PRIVATE romulus::data)
+add_test(NAME romulus_win95_data_probe_tests COMMAND romulus_win95_data_probe_tests)
+
 
 add_executable(romulus_startup_tests platform/startup_tests.cpp)
 target_link_libraries(romulus_startup_tests PRIVATE romulus::platform)
