@@ -1244,6 +1244,174 @@ std::string format_pe_exe_report(const PeExeResource& resource) {
   return output.str();
 }
 
+namespace {
+
+std::string format_version_word_pair(std::uint32_t ms, std::uint32_t ls) {
+  const auto major = (ms >> 16U) & 0xFFFFU;
+  const auto minor = ms & 0xFFFFU;
+  const auto build = (ls >> 16U) & 0xFFFFU;
+  const auto revision = ls & 0xFFFFU;
+  std::ostringstream value;
+  value << major << "." << minor << "." << build << "." << revision;
+  return value.str();
+}
+
+std::string find_version_string_value(const PeVersionResource& version, std::string_view key) {
+  for (const auto& pair : version.string_values) {
+    if (pair.key == key) {
+      return pair.value;
+    }
+  }
+  return {};
+}
+
+std::string format_string_id_ranges(const std::vector<std::uint32_t>& ids) {
+  if (ids.empty()) {
+    return "none";
+  }
+
+  std::ostringstream output;
+  std::size_t index = 0;
+  while (index < ids.size()) {
+    std::uint32_t start = ids[index];
+    std::uint32_t end = start;
+    while ((index + 1) < ids.size() && ids[index + 1] == end + 1) {
+      ++index;
+      end = ids[index];
+    }
+
+    if (output.tellp() > 0) {
+      output << ", ";
+    }
+    if (start == end) {
+      output << start;
+    } else {
+      output << start << "-" << end;
+    }
+    ++index;
+  }
+
+  return output.str();
+}
+
+}  // namespace
+
+std::string format_pe_exe_report(const PeExeResource& resource, const PeResourcePayloadReport& payload_report) {
+  std::ostringstream output;
+  output << "# Caesar II Win95 PE EXE Report\n";
+  output << "format: pe32\n";
+  output << "image_base: 0x" << std::hex << std::setw(8) << std::setfill('0') << resource.image_base << std::dec << "\n";
+  output << "entry_point_rva: 0x" << std::hex << std::setw(8) << std::setfill('0') << resource.entry_point_rva << std::dec
+         << "\n";
+  output << "subsystem: " << resource.subsystem << "\n";
+  output << "section_count: " << resource.section_count << "\n";
+  output << "timestamp: 0x" << std::hex << std::setw(8) << std::setfill('0') << resource.timestamp << std::dec << "\n";
+  output << "has_resources: " << (resource.has_resources ? "yes" : "no") << "\n";
+  output << "has_relocations: " << (resource.has_relocations ? "yes" : "no") << "\n";
+  output << "resource_type_count: " << resource.resource_report.top_level_type_count << "\n";
+  output << "resource_leaf_count: " << resource.resource_report.leaf_count << "\n";
+  output << "import_descriptor_count: " << resource.imports.size() << "\n";
+
+  output << "imports:\n";
+  for (const auto& descriptor : resource.imports) {
+    output << "  - dll: " << descriptor.dll_name << "\n";
+    output << "    function_count: " << descriptor.imported_functions.size() << "\n";
+    output << "    functions:\n";
+    for (const auto& function : descriptor.imported_functions) {
+      output << "      - " << function << "\n";
+    }
+  }
+
+  output << "categorized_summary:\n";
+  for (const auto category : {std::string_view("file_io"), std::string_view("windowing_ui"),
+                              std::string_view("graphics_palette"), std::string_view("audio_video")}) {
+    const auto entries = categorize_imports(resource, category);
+    output << "  - category: " << category << "\n";
+    output << "    match_count: " << entries.size() << "\n";
+    output << "    matches:\n";
+    for (const auto& entry : entries) {
+      output << "      - " << entry << "\n";
+    }
+  }
+
+  output << "resource_payload_summary:\n";
+  output << "  version_resource_count: " << payload_report.version_resources.size() << "\n";
+  output << "  version_resources:\n";
+  for (const auto& version : payload_report.version_resources) {
+    output << "    - name_id: " << version.source_leaf.name_id << "\n";
+    output << "      language_id: " << version.source_leaf.language_id << "\n";
+    output << "      file_version: "
+           << (version.has_fixed_file_info ? format_version_word_pair(version.file_version_ms, version.file_version_ls)
+                                           : "n/a")
+           << "\n";
+    output << "      product_version: "
+           << (version.has_fixed_file_info
+                   ? format_version_word_pair(version.product_version_ms, version.product_version_ls)
+                   : "n/a")
+           << "\n";
+    output << "      CompanyName: " << find_version_string_value(version, "CompanyName") << "\n";
+    output << "      FileDescription: " << find_version_string_value(version, "FileDescription") << "\n";
+    output << "      ProductName: " << find_version_string_value(version, "ProductName") << "\n";
+  }
+
+  std::vector<std::uint32_t> decoded_string_ids;
+  decoded_string_ids.reserve(64);
+  std::vector<std::string> string_preview;
+  string_preview.reserve(6);
+  for (const auto& table : payload_report.string_table_resources) {
+    for (const auto& entry : table.entries) {
+      decoded_string_ids.push_back(entry.string_id);
+      if (string_preview.size() < 6) {
+        std::ostringstream item;
+        item << entry.string_id << ": " << entry.text;
+        string_preview.push_back(item.str());
+      }
+    }
+  }
+  std::sort(decoded_string_ids.begin(), decoded_string_ids.end());
+  decoded_string_ids.erase(std::unique(decoded_string_ids.begin(), decoded_string_ids.end()), decoded_string_ids.end());
+
+  std::vector<std::uint32_t> bundle_ids;
+  bundle_ids.reserve(payload_report.string_table_resources.size());
+  for (const auto& table : payload_report.string_table_resources) {
+    bundle_ids.push_back(table.source_leaf.name_id);
+  }
+  std::sort(bundle_ids.begin(), bundle_ids.end());
+  bundle_ids.erase(std::unique(bundle_ids.begin(), bundle_ids.end()), bundle_ids.end());
+
+  output << "  string_table_resource_count: " << payload_report.string_table_resources.size() << "\n";
+  output << "  string_table_bundle_ids: " << format_string_id_ranges(bundle_ids) << "\n";
+  output << "  decoded_string_entry_count: " << decoded_string_ids.size() << "\n";
+  output << "  decoded_string_id_ranges: " << format_string_id_ranges(decoded_string_ids) << "\n";
+  output << "  decoded_string_preview:\n";
+  for (const auto& item : string_preview) {
+    output << "    - " << item << "\n";
+  }
+
+  std::map<std::string, std::size_t> skipped_by_type;
+  for (const auto& skipped : payload_report.skipped_resources) {
+    std::string key;
+    if (skipped.source_leaf.type_uses_string_name) {
+      key = "name:" + skipped.source_leaf.type_string_name;
+    } else {
+      std::ostringstream type_id;
+      type_id << "id:" << skipped.source_leaf.type_id;
+      if (!skipped.source_leaf.type_label.empty()) {
+        type_id << " (" << skipped.source_leaf.type_label << ")";
+      }
+      key = type_id.str();
+    }
+    ++skipped_by_type[key];
+  }
+  output << "  skipped_resource_count: " << payload_report.skipped_resources.size() << "\n";
+  output << "  skipped_by_type:\n";
+  for (const auto& [type, count] : skipped_by_type) {
+    output << "    - " << type << ": " << count << "\n";
+  }
+
+  return output.str();
+}
+
 std::string format_pe_resource_report(const PeResourceSectionReport& resource_report) {
   std::ostringstream output;
   output << "# Caesar II Win95 PE Resource Report\n";
