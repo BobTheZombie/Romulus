@@ -14,6 +14,7 @@ add_library(romulus_data
   src/pl8_resource.cpp
   src/pe_exe_resource.cpp
   src/win95_data_probe.cpp
+  src/win95_data_container.cpp
 )
 add_library(romulus::data ALIAS romulus_data)
 

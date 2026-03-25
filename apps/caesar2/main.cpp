@@ -19,6 +19,7 @@
 #include "romulus/data/ilbm_image.h"
 #include "romulus/data/pl8_resource.h"
 #include "romulus/data/pe_exe_resource.h"
+#include "romulus/data/win95_data_container.h"
 #include "romulus/data/win95_data_probe.h"
 #include "romulus/platform/application.h"
 #include "romulus/platform/startup.h"
@@ -47,6 +48,7 @@ struct ParsedArguments {
   std::optional<std::string> export_lbm_file;
   std::optional<std::string> view_lbm_file;
   bool probe_win95_data = false;
+  std::optional<std::string> probe_win95_container_file;
   bool index_zero_transparent = false;
   std::optional<std::string> data_dir;
 };
@@ -262,6 +264,16 @@ struct ParsedArguments {
       continue;
     }
 
+    if (argument == "--probe-win95-container") {
+      if (index + 1 >= argc) {
+        romulus::core::log_error("Missing value after --probe-win95-container.");
+        return std::nullopt;
+      }
+
+      parsed.probe_win95_container_file = argv[++index];
+      continue;
+    }
+
     romulus::core::log_error(std::string("Unknown argument: ") + std::string(argument));
     return std::nullopt;
   }
@@ -425,6 +437,21 @@ struct ParsedArguments {
                                 parsed.probe_exe_resource_payloads_file.has_value();
     if (has_other_mode) {
       romulus::core::log_error("--probe-win95-data is mutually exclusive with other command modes.");
+      return std::nullopt;
+    }
+  }
+
+  if (parsed.probe_win95_container_file.has_value()) {
+    const bool has_other_mode = parsed.inventory_manifest || parsed.probe_file.has_value() ||
+                                !parsed.probe_candidates.empty() || parsed.match_signature.has_value() ||
+                                !parsed.classify_candidates.empty() || parsed.export_tile_file.has_value() ||
+                                parsed.view_tile_file.has_value() || parsed.export_lbm_file.has_value() ||
+                                parsed.view_lbm_file.has_value() || parsed.probe_lbm_file.has_value() ||
+                                !parsed.probe_pl8_files.empty() || parsed.probe_exe_file.has_value() ||
+                                parsed.probe_exe_resources_file.has_value() ||
+                                parsed.probe_exe_resource_payloads_file.has_value() || parsed.probe_win95_data;
+    if (has_other_mode) {
+      romulus::core::log_error("--probe-win95-container is mutually exclusive with other command modes.");
       return std::nullopt;
     }
   }
@@ -720,6 +747,17 @@ int run_win95_data_probe(const std::filesystem::path& data_root) {
   return 0;
 }
 
+int run_win95_container_probe(const std::filesystem::path& data_root, const std::string& candidate_arg) {
+  const auto result = romulus::data::probe_win95_data_container_file(data_root, candidate_arg);
+  if (!result.ok()) {
+    romulus::core::log_error(result.error.value().message);
+    return 1;
+  }
+
+  std::cout << romulus::data::format_win95_data_container_report(result.value.value(), candidate_arg);
+  return 0;
+}
+
 [[nodiscard]] std::optional<romulus::data::RgbaImage> decode_lbm_to_rgba(const std::filesystem::path& data_root,
                                                                           const std::string& lbm_file_arg) {
   const auto lbm_path = resolve_data_relative(data_root, lbm_file_arg);
@@ -790,6 +828,7 @@ int main(int argc, char* argv[]) {
         "[--probe-exe-resources <path>] "
         "[--probe-exe-resource-payloads <path>] "
         "[--probe-win95-data] "
+        "[--probe-win95-container <path>] "
         "[--export-lbm-file <path> --export-output <path>] "
         "[--view-lbm-file <path>] "
         "[--classify-candidate <path> ...] [--classify-include-secondary] "
@@ -816,7 +855,7 @@ int main(int argc, char* argv[]) {
                                          parsed->probe_lbm_file.has_value() || !parsed->probe_pl8_files.empty() ||
                                          parsed->probe_exe_file.has_value() || parsed->probe_exe_resources_file.has_value() ||
                                          parsed->probe_exe_resource_payloads_file.has_value() ||
-                                         parsed->probe_win95_data ||
+                                         parsed->probe_win95_data || parsed->probe_win95_container_file.has_value() ||
                                          parsed->export_lbm_file.has_value() || parsed->view_lbm_file.has_value() ||
                                          !parsed->probe_candidates.empty() || parsed->match_signature.has_value() ||
                                          !parsed->classify_candidates.empty() || parsed->export_tile_file.has_value() ||
@@ -857,6 +896,10 @@ int main(int argc, char* argv[]) {
 
   if (parsed->probe_win95_data) {
     return run_win95_data_probe(data_root);
+  }
+
+  if (parsed->probe_win95_container_file.has_value()) {
+    return run_win95_container_probe(data_root, parsed->probe_win95_container_file.value());
   }
 
   if (parsed->export_lbm_file.has_value()) {
