@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 #include <utility>
 
 #include "romulus/core/fixed_timestep_clock.h"
@@ -20,6 +21,90 @@ constexpr int kWindowWidth = 1280;
 constexpr int kWindowHeight = 720;
 constexpr auto kSmokeTestRuntime = std::chrono::milliseconds(50);
 constexpr auto kFixedStep = std::chrono::milliseconds(16);
+
+
+[[nodiscard]] int show_wizard_message_box(const SetupWizardSnapshot& snapshot) {
+  SDL_MessageBoxButtonData buttons[3] = {};
+  int button_count = 0;
+
+  const auto add_button = [&](const int id, const Uint32 flags, const char* text) {
+    buttons[button_count++] = SDL_MessageBoxButtonData{flags, id, text};
+  };
+
+  switch (snapshot.state) {
+    case SetupWizardState::WizardWelcome:
+      add_button(1, SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, "Choose Folder");
+      add_button(0, SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, "Exit");
+      break;
+    case SetupWizardState::WizardChooseFolder:
+      add_button(1, SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, "Open Folder Picker");
+      add_button(0, SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, "Exit");
+      break;
+    case SetupWizardState::WizardValidationFailed:
+      add_button(1, SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, "Retry");
+      add_button(0, SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, "Exit");
+      break;
+    case SetupWizardState::WizardConfirm:
+      add_button(2, SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, "Save and Continue");
+      add_button(1, 0, "Choose Different Folder");
+      add_button(0, SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, "Exit");
+      break;
+    case SetupWizardState::WizardDone:
+      add_button(1, SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, "Continue");
+      break;
+    case SetupWizardState::WizardValidating:
+      add_button(1, SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, "Continue");
+      break;
+  }
+
+  const SDL_MessageBoxData data = {
+      .flags = SDL_MESSAGEBOX_INFORMATION,
+      .window = nullptr,
+      .title = "Romulus Setup",
+      .message = snapshot.summary.c_str(),
+      .numbuttons = button_count,
+      .buttons = buttons,
+      .colorScheme = nullptr,
+  };
+
+  int button = -1;
+  if (SDL_ShowMessageBox(&data, &button) != 0) {
+    romulus::core::log_error(std::string("SDL_ShowMessageBox failed: ") + SDL_GetError());
+    return 0;
+  }
+
+  return button;
+}
+
+[[nodiscard]] SetupWizardAction message_box_prompt(const SetupWizardSnapshot& snapshot) {
+  if (snapshot.state == SetupWizardState::WizardValidating) {
+    return SetupWizardAction::Continue;
+  }
+
+  const int button = show_wizard_message_box(snapshot);
+  switch (snapshot.state) {
+    case SetupWizardState::WizardWelcome:
+    case SetupWizardState::WizardChooseFolder:
+      return button == 1 ? SetupWizardAction::ChooseFolder : SetupWizardAction::Exit;
+    case SetupWizardState::WizardValidationFailed:
+      return button == 1 ? SetupWizardAction::Retry : SetupWizardAction::Exit;
+    case SetupWizardState::WizardConfirm:
+      if (button == 2) {
+        return SetupWizardAction::Confirm;
+      }
+
+      if (button == 1) {
+        return SetupWizardAction::Retry;
+      }
+
+      return SetupWizardAction::Exit;
+    case SetupWizardState::WizardDone:
+    case SetupWizardState::WizardValidating:
+      return SetupWizardAction::Continue;
+  }
+
+  return SetupWizardAction::Exit;
+}
 }  // namespace
 
 Application::Application(ApplicationOptions options) : options_(std::move(options)) {}
@@ -171,75 +256,18 @@ bool Application::run_bootstrap_flow() {
     return false;
   }
 
-  SDL_Window* window = SDL_CreateWindow(
-      "Romulus Setup",
-      SDL_WINDOWPOS_CENTERED,
-      SDL_WINDOWPOS_CENTERED,
-      800,
-      220,
-      options_.smoke_test ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN);
+  const auto startup = evaluate_startup_data_root(options_.data_root);
+  const auto result = run_setup_wizard(options_.startup_config_path, options_.folder_picker, message_box_prompt, startup);
 
-  if (window == nullptr) {
-    romulus::core::log_error(std::string("SDL_CreateWindow failed in setup: ") + SDL_GetError());
-    SDL_Quit();
+  SDL_Quit();
+
+  if (!result.completed || !result.data_root.has_value()) {
+    romulus::core::log_warning("Setup wizard exited before completion.");
     return false;
   }
 
-  SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION,
-                           "Romulus Setup",
-                           "No valid Caesar II Win95 data root is configured.\n"
-                           "Press O to choose a folder, or Esc to exit.",
-                           window);
-
-  bool running = true;
-  bool ready = false;
-  while (running && !ready) {
-    SDL_Event event;
-    while (SDL_PollEvent(&event) != 0) {
-      if (event.type == SDL_QUIT) {
-        running = false;
-      }
-
-      if (event.type == SDL_KEYDOWN) {
-        if (event.key.keysym.sym == SDLK_ESCAPE) {
-          running = false;
-        }
-
-        if (event.key.keysym.sym == SDLK_o) {
-          const auto selected = options_.folder_picker();
-          if (!selected.has_value()) {
-            romulus::core::log_warning("Folder selection canceled or unavailable.");
-            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING,
-                                     "Romulus Setup",
-                                     "No folder was selected.\nPress O to try again, or Esc to exit.",
-                                     window);
-            continue;
-          }
-
-          const auto resolved = romulus::data::resolve_data_root(selected->string());
-          const auto status = evaluate_startup_data_root(std::optional<std::filesystem::path>(resolved));
-          if (status.state != StartupState::DataRootReady) {
-            romulus::core::log_warning(status.message);
-            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Invalid Caesar II folder", status.message.c_str(), window);
-            continue;
-          }
-
-          options_.data_root = resolved;
-          if (!persist_data_root(options_.startup_config_path, resolved)) {
-            romulus::core::log_warning("Selected data root is valid but could not be persisted.");
-          }
-
-          ready = true;
-        }
-      }
-    }
-
-    SDL_Delay(1);
-  }
-
-  SDL_DestroyWindow(window);
-  SDL_Quit();
-  return ready;
+  options_.data_root = result.data_root;
+  return true;
 }
 
 void Application::simulate_step() {}
