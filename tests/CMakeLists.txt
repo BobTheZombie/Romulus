@@ -46,6 +46,10 @@ add_executable(romulus_map_resource_tests data/map_resource_tests.cpp)
 target_link_libraries(romulus_map_resource_tests PRIVATE romulus::data)
 add_test(NAME romulus_map_resource_tests COMMAND romulus_map_resource_tests)
 
+add_executable(romulus_ilbm_image_tests data/ilbm_image_tests.cpp)
+target_link_libraries(romulus_ilbm_image_tests PRIVATE romulus::data)
+add_test(NAME romulus_ilbm_image_tests COMMAND romulus_ilbm_image_tests)
+
 add_executable(romulus_signature_registry_tests data/signature_registry_tests.cpp)
 target_link_libraries(romulus_signature_registry_tests PRIVATE romulus::data)
 add_test(NAME romulus_signature_registry_tests COMMAND romulus_signature_registry_tests)

@@ -16,6 +16,7 @@
 #include "romulus/data/image_export.h"
 #include "romulus/data/indexed_image.h"
 #include "romulus/data/palette.h"
+#include "romulus/data/ilbm_image.h"
 #include "romulus/platform/application.h"
 
 namespace {
@@ -34,6 +35,7 @@ struct ParsedArguments {
   std::optional<std::string> export_output_file;
   std::optional<std::string> view_tile_file;
   std::optional<std::string> view_palette_file;
+  std::optional<std::string> probe_lbm_file;
   bool index_zero_transparent = false;
   std::optional<std::string> data_dir;
 };
@@ -174,6 +176,16 @@ struct ParsedArguments {
       continue;
     }
 
+    if (argument == "--probe-lbm") {
+      if (index + 1 >= argc) {
+        romulus::core::log_error("Missing value after --probe-lbm.");
+        return std::nullopt;
+      }
+
+      parsed.probe_lbm_file = argv[++index];
+      continue;
+    }
+
     romulus::core::log_error(std::string("Unknown argument: ") + std::string(argument));
     return std::nullopt;
   }
@@ -235,6 +247,17 @@ struct ParsedArguments {
   if (parsed.classify_include_secondary && parsed.classify_candidates.empty()) {
     romulus::core::log_error("--classify-include-secondary requires --classify-candidate.");
     return std::nullopt;
+  }
+
+  if (parsed.probe_lbm_file.has_value()) {
+    const bool has_other_mode = parsed.inventory_manifest || parsed.probe_file.has_value() ||
+                                !parsed.probe_candidates.empty() || parsed.match_signature.has_value() ||
+                                !parsed.classify_candidates.empty() || parsed.export_tile_file.has_value() ||
+                                parsed.view_tile_file.has_value();
+    if (has_other_mode) {
+      romulus::core::log_error("--probe-lbm is mutually exclusive with other command modes.");
+      return std::nullopt;
+    }
   }
 
   return parsed;
@@ -422,6 +445,24 @@ int run_tile_viewer(const std::filesystem::path& data_root,
   return app.run();
 }
 
+int run_lbm_probe(const std::filesystem::path& data_root, const std::string& lbm_file_arg) {
+  const auto candidate = resolve_data_relative(data_root, lbm_file_arg);
+  const auto loaded = romulus::data::load_file_to_memory(candidate);
+  if (!loaded.ok()) {
+    romulus::core::log_error(loaded.error.value().message);
+    return 1;
+  }
+
+  const auto parsed = romulus::data::parse_ilbm_image(loaded.value.value().bytes);
+  if (!parsed.ok()) {
+    romulus::core::log_error(parsed.error.value().message);
+    return 1;
+  }
+
+  std::cout << romulus::data::format_lbm_report(parsed.value.value());
+  return 0;
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -430,6 +471,7 @@ int main(int argc, char* argv[]) {
     romulus::core::log_error(
         "Usage: caesar2 [--smoke-test] [--data-dir <path>] [--inventory-manifest] [--manifest-out <path>] "
         "[--probe-file <path>] [--probe-candidate <path>] [--match-signature <path>] "
+        "[--probe-lbm <path>] "
         "[--classify-candidate <path> ...] [--classify-include-secondary] "
         "[--export-tile-file <path> --export-palette-file <path> --export-output <path> "
         "[--index-zero-transparent]] [--view-tile-file <path> --view-palette-file <path> "
@@ -447,6 +489,10 @@ int main(int argc, char* argv[]) {
 
   if (parsed->probe_file.has_value()) {
     return run_binary_probe(data_root, parsed->probe_file.value());
+  }
+
+  if (parsed->probe_lbm_file.has_value()) {
+    return run_lbm_probe(data_root, parsed->probe_lbm_file.value());
   }
 
   if (!parsed->probe_candidates.empty()) {
