@@ -4,6 +4,7 @@
 #include <optional>
 
 #include "romulus/data/indexed_image.h"
+#include "romulus/platform/startup.h"
 
 struct SDL_Renderer;
 struct SDL_Texture;
@@ -12,8 +13,10 @@ namespace romulus::platform {
 
 struct ApplicationOptions {
   bool smoke_test = false;
-  std::filesystem::path data_root = ".";
+  std::optional<std::filesystem::path> data_root;
   std::optional<romulus::data::RgbaImage> debug_view_image;
+  FolderPicker folder_picker = pick_data_root_with_native_dialog;
+  std::filesystem::path startup_config_path = default_startup_config_path();
 };
 
 class Application {
@@ -25,6 +28,7 @@ class Application {
  private:
   void simulate_step();
   void render_frame(double alpha);
+  bool run_bootstrap_flow();
 
   ApplicationOptions options_;
   SDL_Renderer* renderer_ = nullptr;

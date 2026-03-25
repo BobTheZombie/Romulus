@@ -25,14 +25,22 @@ constexpr auto kFixedStep = std::chrono::milliseconds(16);
 Application::Application(ApplicationOptions options) : options_(std::move(options)) {}
 
 int Application::run() {
-  const auto validation = romulus::data::validate_data_root(options_.data_root);
-  if (!validation.ok) {
-    romulus::core::log_error(romulus::data::format_validation_error(validation));
-    return 1;
+  StartupStatus startup = evaluate_startup_data_root(options_.data_root);
+  if (startup.state != StartupState::DataRootReady) {
+    romulus::core::log_warning(startup.message);
+    if (!run_bootstrap_flow()) {
+      return 0;
+    }
+
+    startup = evaluate_startup_data_root(options_.data_root);
+    if (startup.state != StartupState::DataRootReady) {
+      romulus::core::log_error(startup.message);
+      return 1;
+    }
   }
 
   romulus::core::log_info("Starting Caesar II Reimplementation.");
-  romulus::core::log_info(std::string("Using Caesar II data root: ") + options_.data_root.string());
+  romulus::core::log_info(std::string("Using Caesar II data root: ") + options_.data_root->string());
 
   if (SDL_Init(SDL_INIT_VIDEO) != 0) {
     romulus::core::log_error(std::string("SDL_Init failed: ") + SDL_GetError());
@@ -155,6 +163,83 @@ int Application::run() {
   romulus::core::log_info("Shutdown complete.");
 
   return 0;
+}
+
+bool Application::run_bootstrap_flow() {
+  if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+    romulus::core::log_error(std::string("SDL_Init failed: ") + SDL_GetError());
+    return false;
+  }
+
+  SDL_Window* window = SDL_CreateWindow(
+      "Romulus Setup",
+      SDL_WINDOWPOS_CENTERED,
+      SDL_WINDOWPOS_CENTERED,
+      800,
+      220,
+      options_.smoke_test ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN);
+
+  if (window == nullptr) {
+    romulus::core::log_error(std::string("SDL_CreateWindow failed in setup: ") + SDL_GetError());
+    SDL_Quit();
+    return false;
+  }
+
+  SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION,
+                           "Romulus Setup",
+                           "No valid Caesar II Win95 data root is configured.\n"
+                           "Press O to choose a folder, or Esc to exit.",
+                           window);
+
+  bool running = true;
+  bool ready = false;
+  while (running && !ready) {
+    SDL_Event event;
+    while (SDL_PollEvent(&event) != 0) {
+      if (event.type == SDL_QUIT) {
+        running = false;
+      }
+
+      if (event.type == SDL_KEYDOWN) {
+        if (event.key.keysym.sym == SDLK_ESCAPE) {
+          running = false;
+        }
+
+        if (event.key.keysym.sym == SDLK_o) {
+          const auto selected = options_.folder_picker();
+          if (!selected.has_value()) {
+            romulus::core::log_warning("Folder selection canceled or unavailable.");
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING,
+                                     "Romulus Setup",
+                                     "No folder was selected.\nPress O to try again, or Esc to exit.",
+                                     window);
+            continue;
+          }
+
+          const auto resolved = romulus::data::resolve_data_root(selected->string());
+          const auto status = evaluate_startup_data_root(std::optional<std::filesystem::path>(resolved));
+          if (status.state != StartupState::DataRootReady) {
+            romulus::core::log_warning(status.message);
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Invalid Caesar II folder", status.message.c_str(), window);
+            continue;
+          }
+
+          options_.data_root = resolved;
+          if (!persist_data_root(options_.startup_config_path, resolved)) {
+            romulus::core::log_warning("Selected data root is valid but could not be persisted.");
+          }
+
+          ready = true;
+        }
+      }
+    }
+
+    SDL_Delay(1);
+  }
+
+  SDL_DestroyWindow(window);
+  SDL_Quit();
+  return ready;
 }
 
 void Application::simulate_step() {}

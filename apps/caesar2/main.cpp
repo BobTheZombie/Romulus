@@ -20,6 +20,7 @@
 #include "romulus/data/pl8_resource.h"
 #include "romulus/data/pe_exe_resource.h"
 #include "romulus/platform/application.h"
+#include "romulus/platform/startup.h"
 
 namespace {
 
@@ -764,9 +765,32 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  const std::filesystem::path data_root = parsed->data_dir.has_value()
-                                              ? romulus::data::resolve_data_root(parsed->data_dir.value())
-                                              : romulus::data::resolve_data_root(".");
+  const auto config_path = romulus::platform::default_startup_config_path();
+  std::optional<std::filesystem::path> preferred_data_root;
+
+  if (parsed->data_dir.has_value()) {
+    preferred_data_root = romulus::data::resolve_data_root(parsed->data_dir.value());
+  } else if (const auto persisted = romulus::platform::load_persisted_data_root(config_path); persisted.has_value()) {
+    preferred_data_root = romulus::data::resolve_data_root(persisted->string());
+  }
+
+  const auto startup = romulus::platform::evaluate_startup_data_root(preferred_data_root);
+  const std::filesystem::path data_root = startup.data_root.value_or(std::filesystem::path("."));
+
+
+  const bool has_data_required_command = parsed->inventory_manifest || parsed->probe_file.has_value() ||
+                                         parsed->probe_lbm_file.has_value() || !parsed->probe_pl8_files.empty() ||
+                                         parsed->probe_exe_file.has_value() || parsed->probe_exe_resources_file.has_value() ||
+                                         parsed->probe_exe_resource_payloads_file.has_value() ||
+                                         parsed->export_lbm_file.has_value() || parsed->view_lbm_file.has_value() ||
+                                         !parsed->probe_candidates.empty() || parsed->match_signature.has_value() ||
+                                         !parsed->classify_candidates.empty() || parsed->export_tile_file.has_value() ||
+                                         parsed->view_tile_file.has_value();
+
+  if (has_data_required_command && startup.state != romulus::platform::StartupState::DataRootReady) {
+    romulus::core::log_error(startup.message);
+    return 1;
+  }
 
   if (parsed->inventory_manifest) {
     return run_manifest_generation(data_root, parsed->inventory_manifest_out);
@@ -834,7 +858,8 @@ int main(int argc, char* argv[]) {
 
   romulus::platform::Application app({
       .smoke_test = parsed->smoke_test,
-      .data_root = data_root,
+      .data_root = preferred_data_root,
+      .startup_config_path = config_path,
   });
 
   return app.run();
