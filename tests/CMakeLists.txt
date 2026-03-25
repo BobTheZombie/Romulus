@@ -49,3 +49,7 @@ add_test(NAME romulus_map_resource_tests COMMAND romulus_map_resource_tests)
 add_executable(romulus_signature_registry_tests data/signature_registry_tests.cpp)
 target_link_libraries(romulus_signature_registry_tests PRIVATE romulus::data)
 add_test(NAME romulus_signature_registry_tests COMMAND romulus_signature_registry_tests)
+
+add_executable(romulus_batch_classification_tests data/batch_classification_tests.cpp)
+target_link_libraries(romulus_batch_classification_tests PRIVATE romulus::data)
+add_test(NAME romulus_batch_classification_tests COMMAND romulus_batch_classification_tests)

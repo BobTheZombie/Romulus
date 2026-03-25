@@ -283,7 +283,85 @@ std::string format_signature_registry_report(const SignatureRegistryResult& resu
 
   return output.str();
 }
+[[nodiscard]] std::string summarize_match_evidence(const SignatureMatch& match) {
+  if (match.evidence.empty()) {
+    return "no evidence";
+  }
 
+  std::ostringstream output;
+  const std::size_t count = std::min<std::size_t>(2, match.evidence.size());
+  for (std::size_t index = 0; index < count; ++index) {
+    if (index != 0) {
+      output << "; ";
+    }
+
+    output << match.evidence[index].detail;
+  }
+
+  if (match.evidence.size() > count) {
+    output << "; +" << (match.evidence.size() - count) << " more";
+  }
+
+  return output.str();
+}
+
+BatchClassificationReport classify_candidate_batch(const CandidateProbeBundleReport& probe_bundle,
+                                                   const bool include_secondary_matches) {
+  BatchClassificationReport report;
+  report.files.reserve(probe_bundle.files.size());
+
+  for (const auto& candidate : probe_bundle.files) {
+    const auto matched = match_candidate_signatures(probe_bundle, candidate);
+
+    BatchClassificationSummary summary;
+    summary.path = matched.path;
+
+    if (matched.matches.empty()) {
+      summary.evidence_summary = "no signature evidence";
+      report.files.push_back(std::move(summary));
+      continue;
+    }
+
+    const auto& top = matched.matches.front();
+    summary.top_decoder_id = top.decoder_id;
+    summary.confidence = top.confidence;
+    summary.evidence_summary = summarize_match_evidence(top);
+
+    if (include_secondary_matches && matched.matches.size() > 1) {
+      const auto& second = matched.matches[1];
+      if (second.confidence == SignatureConfidence::High || second.confidence == SignatureConfidence::Medium) {
+        summary.secondary_matches.push_back(second);
+      }
+    }
+
+    report.files.push_back(std::move(summary));
+  }
+
+  std::stable_sort(report.files.begin(), report.files.end(), [](const auto& left, const auto& right) {
+    return normalize_key(left.path) < normalize_key(right.path);
+  });
+
+  return report;
+}
+
+std::string format_batch_classification_report(const BatchClassificationReport& report) {
+  std::ostringstream output;
+  output << "# Caesar II Batch Candidate Classification\n";
+
+  for (const auto& file : report.files) {
+    output << "- file: " << file.path.generic_string() << "\n";
+    output << "  top_decoder: " << to_string(file.top_decoder_id) << "\n";
+    output << "  confidence: " << to_string(file.confidence) << "\n";
+    output << "  evidence: " << file.evidence_summary << "\n";
+    if (!file.secondary_matches.empty()) {
+      const auto& secondary = file.secondary_matches.front();
+      output << "  secondary: " << to_string(secondary.decoder_id) << " (" << to_string(secondary.confidence)
+             << ", score " << secondary.score << ")\n";
+    }
+  }
+
+  return output.str();
+}
 std::string to_string(const CandidateDecoderId decoder_id) {
   switch (decoder_id) {
     case CandidateDecoderId::None:
