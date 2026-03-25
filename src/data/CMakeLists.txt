@@ -11,6 +11,7 @@ add_library(romulus_data
   src/image_export.cpp
   src/map_resource.cpp
   src/ilbm_image.cpp
+  src/pl8_resource.cpp
 )
 add_library(romulus::data ALIAS romulus_data)
 
