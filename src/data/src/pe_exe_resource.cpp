@@ -5,6 +5,7 @@
 #include <cctype>
 #include <cstddef>
 #include <iomanip>
+#include <iterator>
 #include <map>
 #include <limits>
 #include <sstream>
@@ -22,6 +23,10 @@ constexpr std::size_t kMaxImportDescriptors = 4096;
 constexpr std::size_t kMaxImportsPerDescriptor = 16384;
 constexpr std::size_t kMaxResourceDirectories = 16384;
 constexpr std::size_t kMaxResourceLeaves = 65536;
+constexpr std::size_t kMaxVersionBlocks = 4096;
+constexpr std::size_t kMaxVersionStrings = 1024;
+constexpr std::size_t kVersionFixedFileInfoSize = 52;
+constexpr std::uint32_t kVersionFixedFileInfoSignature = 0xFEEF04BDU;
 
 constexpr std::uint32_t kResourceIdCursor = 1;
 constexpr std::uint32_t kResourceIdBitmap = 2;
@@ -281,6 +286,63 @@ struct ResourceDirectoryHeaderView {
   }
 
   return {.value = decoded};
+}
+
+[[nodiscard]] std::size_t align_to_4(const std::size_t value) {
+  return (value + 3U) & ~static_cast<std::size_t>(3U);
+}
+
+[[nodiscard]] std::string decode_utf16_char(std::uint16_t value) {
+  if (value >= 32U && value <= 126U) {
+    return std::string(1, static_cast<char>(value));
+  }
+  std::ostringstream escaped;
+  escaped << "\\u" << std::hex << std::uppercase << std::setw(4) << std::setfill('0') << value;
+  return escaped.str();
+}
+
+[[nodiscard]] ParseResult<std::string> read_utf16_z_string(std::span<const std::byte> bytes,
+                                                           std::size_t start_offset,
+                                                           std::size_t end_offset,
+                                                           const std::string& field_name) {
+  BinaryReader reader(bytes);
+  if (const auto seek_error = reader.seek(start_offset); seek_error.has_value()) {
+    return {.error = make_invalid_pe_error(start_offset, 2, bytes.size(), "Invalid " + field_name + " offset")};
+  }
+
+  std::string value;
+  for (std::size_t offset = start_offset; offset + 2 <= end_offset; offset += 2) {
+    const auto code_unit = reader.read_u16_le();
+    if (!code_unit.ok()) {
+      return {.error = make_invalid_pe_error(start_offset, 2, bytes.size(), "Truncated " + field_name)};
+    }
+    if (code_unit.value.value() == 0) {
+      return {.value = value};
+    }
+    value += decode_utf16_char(code_unit.value.value());
+  }
+
+  return {.error = make_invalid_pe_error(start_offset, end_offset - start_offset, bytes.size(), "Unterminated " + field_name)};
+}
+
+[[nodiscard]] ParseResult<std::string> read_utf16_counted_string(std::span<const std::byte> bytes,
+                                                                 std::size_t start_offset,
+                                                                 std::size_t code_units,
+                                                                 const std::string& field_name) {
+  BinaryReader reader(bytes);
+  if (const auto seek_error = reader.seek(start_offset); seek_error.has_value()) {
+    return {.error = make_invalid_pe_error(start_offset, code_units * 2, bytes.size(), "Invalid " + field_name + " offset")};
+  }
+
+  std::string value;
+  for (std::size_t index = 0; index < code_units; ++index) {
+    const auto code_unit = reader.read_u16_le();
+    if (!code_unit.ok()) {
+      return {.error = make_invalid_pe_error(start_offset, code_units * 2, bytes.size(), "Truncated " + field_name)};
+    }
+    value += decode_utf16_char(code_unit.value.value());
+  }
+  return {.value = value};
 }
 
 [[nodiscard]] std::vector<std::string> categorize_imports(const PeExeResource& resource,
@@ -893,6 +955,254 @@ ParseResult<PeExeResource> parse_pe_exe_resource(std::span<const std::uint8_t> b
   return parse_pe_exe_resource(std::span<const std::byte>(reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()));
 }
 
+ParseResult<PeResourcePayloadReport> decode_pe_resource_payloads(std::span<const std::byte> bytes,
+                                                                 const PeExeResource& resource) {
+  PeResourcePayloadReport report;
+  for (const auto& leaf : resource.resource_report.tree.leaves) {
+    const std::size_t payload_size = static_cast<std::size_t>(leaf.data_size);
+    if (leaf.data_file_offset + payload_size > bytes.size()) {
+      return {.error = make_invalid_pe_error(
+                  leaf.data_file_offset, payload_size, bytes.size(), "Resource payload points outside file bytes")};
+    }
+    const auto payload = bytes.subspan(leaf.data_file_offset, payload_size);
+
+    if (!leaf.type_uses_string_name && leaf.type_id == kResourceIdVersion) {
+      if (payload.size() < 6) {
+        return {.error = make_invalid_pe_error(
+                    leaf.data_file_offset, payload.size(), bytes.size(), "Truncated VERSION resource header")};
+      }
+
+      BinaryReader reader(payload);
+      const auto root_length = reader.read_u16_le();
+      const auto root_value_length = reader.read_u16_le();
+      const auto root_type = reader.read_u16_le();
+      if (!root_length.ok() || !root_value_length.ok() || !root_type.ok()) {
+        return {.error = make_invalid_pe_error(
+                    leaf.data_file_offset, payload.size(), bytes.size(), "Truncated VERSION resource root header")};
+      }
+      const std::size_t declared_root_length = root_length.value.value();
+      if (declared_root_length < 6 || declared_root_length > payload.size()) {
+        return {.error = make_invalid_pe_error(leaf.data_file_offset,
+                                               payload.size(),
+                                               bytes.size(),
+                                               "Invalid VS_VERSION_INFO root length in VERSION resource")};
+      }
+
+      const auto root_key = read_utf16_z_string(payload, 6, declared_root_length, "VERSION root key");
+      if (!root_key.ok()) {
+        return {.error = make_invalid_pe_error(
+                    leaf.data_file_offset, declared_root_length, bytes.size(), root_key.error->message)};
+      }
+      if (root_key.value.value() != "VS_VERSION_INFO") {
+        return {.error = make_invalid_pe_error(leaf.data_file_offset,
+                                               declared_root_length,
+                                               bytes.size(),
+                                               "Unsupported VERSION root key; expected VS_VERSION_INFO")};
+      }
+
+      std::size_t key_bytes = (root_key.value->size() + 1U) * 2U;
+      std::size_t value_offset = align_to_4(6U + key_bytes);
+      if (value_offset > declared_root_length) {
+        return {.error = make_invalid_pe_error(
+                    leaf.data_file_offset, declared_root_length, bytes.size(), "Invalid VERSION key alignment")};
+      }
+
+      PeVersionResource decoded;
+      decoded.source_leaf = leaf;
+
+      const std::size_t root_value_byte_length = static_cast<std::size_t>(root_value_length.value.value()) * 2U;
+      if (root_type.value.value() == 0 && root_value_byte_length >= kVersionFixedFileInfoSize &&
+          value_offset + kVersionFixedFileInfoSize <= declared_root_length) {
+        BinaryReader fixed_reader(payload);
+        if (const auto seek_error = fixed_reader.seek(value_offset); seek_error.has_value()) {
+          return {.error = make_invalid_pe_error(
+                      leaf.data_file_offset + value_offset, 4, bytes.size(), "Invalid VERSION fixed file info offset")};
+        }
+        const auto signature = fixed_reader.read_u32_le();
+        if (!signature.ok()) {
+          return {.error = make_invalid_pe_error(
+                      leaf.data_file_offset + value_offset, 4, bytes.size(), "Truncated VERSION fixed file info")};
+        }
+        if (signature.value.value() == kVersionFixedFileInfoSignature) {
+          decoded.has_fixed_file_info = true;
+          const auto skip_struc = fixed_reader.read_u32_le();
+          const auto file_ms = fixed_reader.read_u32_le();
+          const auto file_ls = fixed_reader.read_u32_le();
+          const auto product_ms = fixed_reader.read_u32_le();
+          const auto product_ls = fixed_reader.read_u32_le();
+          if (!skip_struc.ok() || !file_ms.ok() || !file_ls.ok() || !product_ms.ok() || !product_ls.ok()) {
+            return {.error = make_invalid_pe_error(leaf.data_file_offset + value_offset,
+                                                   kVersionFixedFileInfoSize,
+                                                   bytes.size(),
+                                                   "Truncated VS_FIXEDFILEINFO in VERSION resource")};
+          }
+          decoded.file_version_ms = file_ms.value.value();
+          decoded.file_version_ls = file_ls.value.value();
+          decoded.product_version_ms = product_ms.value.value();
+          decoded.product_version_ls = product_ls.value.value();
+        }
+      }
+
+      std::vector<std::size_t> block_offsets;
+      block_offsets.push_back(0);
+      for (std::size_t block_index = 0; block_index < block_offsets.size(); ++block_index) {
+        if (block_index > kMaxVersionBlocks) {
+          return {.error = make_invalid_pe_error(
+                      leaf.data_file_offset, payload.size(), bytes.size(), "Exceeded VERSION block traversal limit")};
+        }
+
+        const std::size_t block_offset = block_offsets[block_index];
+        if (block_offset + 6 > declared_root_length) {
+          continue;
+        }
+        BinaryReader block_reader(payload);
+        if (const auto seek_error = block_reader.seek(block_offset); seek_error.has_value()) {
+          return {.error = make_invalid_pe_error(
+                      leaf.data_file_offset + block_offset, 6, bytes.size(), "Invalid VERSION block offset")};
+        }
+        const auto block_length = block_reader.read_u16_le();
+        const auto block_value_length = block_reader.read_u16_le();
+        const auto block_type = block_reader.read_u16_le();
+        if (!block_length.ok() || !block_value_length.ok() || !block_type.ok()) {
+          return {.error = make_invalid_pe_error(
+                      leaf.data_file_offset + block_offset, 6, bytes.size(), "Truncated VERSION block header")};
+        }
+        const std::size_t length = block_length.value.value();
+        if (length < 6) {
+          continue;
+        }
+        const std::size_t block_end = block_offset + length;
+        if (block_end > declared_root_length) {
+          return {.error = make_invalid_pe_error(
+                      leaf.data_file_offset + block_offset, length, bytes.size(), "VERSION block extends beyond root")};
+        }
+
+        const auto block_key = read_utf16_z_string(payload, block_offset + 6, block_end, "VERSION block key");
+        if (!block_key.ok()) {
+          return {.error = make_invalid_pe_error(
+                      leaf.data_file_offset + block_offset, length, bytes.size(), block_key.error->message)};
+        }
+        const std::size_t block_key_bytes = (block_key.value->size() + 1U) * 2U;
+        const std::size_t block_value_offset = block_offset + align_to_4(6U + block_key_bytes);
+
+        const bool can_decode_string =
+            block_type.value.value() == 1 && block_value_length.value.value() > 0 &&
+            block_value_offset + (static_cast<std::size_t>(block_value_length.value.value()) * 2U) <= block_end;
+        if (can_decode_string && block_key.value.value() != "VS_VERSION_INFO") {
+          const auto value = read_utf16_counted_string(payload,
+                                                       block_value_offset,
+                                                       block_value_length.value.value(),
+                                                       "VERSION string value");
+          if (!value.ok()) {
+            return {.error = make_invalid_pe_error(
+                        leaf.data_file_offset + block_value_offset,
+                        static_cast<std::size_t>(block_value_length.value.value()) * 2U,
+                        bytes.size(),
+                        value.error->message)};
+          }
+          decoded.string_values.push_back({.key = block_key.value.value(), .value = value.value.value()});
+          if (decoded.string_values.size() > kMaxVersionStrings) {
+            return {.error = make_invalid_pe_error(
+                        leaf.data_file_offset, payload.size(), bytes.size(), "Exceeded VERSION string extraction limit")};
+          }
+        }
+
+        std::size_t child_offset = block_offset + align_to_4(6U + block_key_bytes +
+                                                              (static_cast<std::size_t>(block_value_length.value.value()) *
+                                                               (block_type.value.value() == 1 ? 2U : 1U)));
+        while (child_offset + 6 <= block_end) {
+          BinaryReader child_reader(payload);
+          if (const auto seek_error = child_reader.seek(child_offset); seek_error.has_value()) {
+            break;
+          }
+          const auto child_length = child_reader.read_u16_le();
+          if (!child_length.ok()) {
+            break;
+          }
+          const std::size_t child_size = child_length.value.value();
+          if (child_size == 0) {
+            break;
+          }
+          if (child_offset + child_size > block_end) {
+            return {.error = make_invalid_pe_error(leaf.data_file_offset + child_offset,
+                                                   child_size,
+                                                   bytes.size(),
+                                                   "VERSION child block exceeds parent bounds")};
+          }
+          block_offsets.push_back(child_offset);
+          child_offset += align_to_4(child_size);
+        }
+      }
+
+      std::sort(decoded.string_values.begin(),
+                decoded.string_values.end(),
+                [](const PeVersionResourceStringValue& lhs, const PeVersionResourceStringValue& rhs) {
+                  if (lhs.key != rhs.key) {
+                    return lhs.key < rhs.key;
+                  }
+                  return lhs.value < rhs.value;
+                });
+      report.version_resources.push_back(std::move(decoded));
+      continue;
+    }
+
+    if (!leaf.type_uses_string_name && leaf.type_id == kResourceIdString) {
+      PeStringTableResource table;
+      table.source_leaf = leaf;
+      BinaryReader reader(payload);
+      for (std::size_t index = 0; index < 16; ++index) {
+        const auto char_count = reader.read_u16_le();
+        if (!char_count.ok()) {
+          return {.error = make_invalid_pe_error(
+                      leaf.data_file_offset, payload.size(), bytes.size(), "Truncated STRINGTABLE string length")};
+        }
+        const std::size_t chars = char_count.value.value();
+        const auto text = read_utf16_counted_string(payload, reader.tell(), chars, "STRINGTABLE string");
+        if (!text.ok()) {
+          return {.error = make_invalid_pe_error(
+                      leaf.data_file_offset, payload.size(), bytes.size(), "Truncated STRINGTABLE string payload")};
+        }
+        if (chars > 0) {
+          const std::uint32_t base_id = leaf.name_id == 0 ? 0 : ((leaf.name_id - 1U) * 16U);
+          table.entries.push_back({.string_id = base_id + static_cast<std::uint32_t>(index), .text = text.value.value()});
+        }
+        if (const auto skip_error = reader.seek(reader.tell() + (chars * 2U)); skip_error.has_value()) {
+          return {.error = make_invalid_pe_error(
+                      leaf.data_file_offset, payload.size(), bytes.size(), "Truncated STRINGTABLE string payload")};
+        }
+      }
+      report.string_table_resources.push_back(std::move(table));
+      continue;
+    }
+
+    report.skipped_resources.push_back({.source_leaf = leaf, .reason = "unsupported resource type"});
+  }
+
+  std::sort(report.version_resources.begin(),
+            report.version_resources.end(),
+            [](const PeVersionResource& lhs, const PeVersionResource& rhs) {
+              if (lhs.source_leaf.name_id != rhs.source_leaf.name_id) {
+                return lhs.source_leaf.name_id < rhs.source_leaf.name_id;
+              }
+              return lhs.source_leaf.language_id < rhs.source_leaf.language_id;
+            });
+  std::sort(report.string_table_resources.begin(),
+            report.string_table_resources.end(),
+            [](const PeStringTableResource& lhs, const PeStringTableResource& rhs) {
+              if (lhs.source_leaf.name_id != rhs.source_leaf.name_id) {
+                return lhs.source_leaf.name_id < rhs.source_leaf.name_id;
+              }
+              return lhs.source_leaf.language_id < rhs.source_leaf.language_id;
+            });
+  return {.value = std::move(report)};
+}
+
+ParseResult<PeResourcePayloadReport> decode_pe_resource_payloads(std::span<const std::uint8_t> bytes,
+                                                                 const PeExeResource& resource) {
+  return decode_pe_resource_payloads(
+      std::span<const std::byte>(reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()), resource);
+}
+
 std::string format_pe_exe_report(const PeExeResource& resource) {
   std::ostringstream output;
   output << "# Caesar II Win95 PE EXE Report\n";
@@ -980,6 +1290,76 @@ std::string format_pe_resource_report(const PeResourceSectionReport& resource_re
     output << "    data_size: " << leaf.data_size << "\n";
   }
 
+  return output.str();
+}
+
+std::string format_pe_version_resource_report(const PeResourcePayloadReport& payload_report) {
+  std::ostringstream output;
+  output << "version_resource_count: " << payload_report.version_resources.size() << "\n";
+  output << "version_resources:\n";
+  for (const auto& version : payload_report.version_resources) {
+    output << "  - name_id: " << version.source_leaf.name_id << "\n";
+    output << "    language_id: " << version.source_leaf.language_id << "\n";
+    output << "    has_fixed_file_info: " << (version.has_fixed_file_info ? "yes" : "no") << "\n";
+    if (version.has_fixed_file_info) {
+      output << "    file_version_ms: 0x" << std::hex << std::setw(8) << std::setfill('0') << version.file_version_ms
+             << std::dec << "\n";
+      output << "    file_version_ls: 0x" << std::hex << std::setw(8) << std::setfill('0') << version.file_version_ls
+             << std::dec << "\n";
+      output << "    product_version_ms: 0x" << std::hex << std::setw(8) << std::setfill('0')
+             << version.product_version_ms << std::dec << "\n";
+      output << "    product_version_ls: 0x" << std::hex << std::setw(8) << std::setfill('0')
+             << version.product_version_ls << std::dec << "\n";
+    }
+    output << "    string_values:\n";
+    for (const auto& pair : version.string_values) {
+      output << "      - key: " << pair.key << "\n";
+      output << "        value: " << pair.value << "\n";
+    }
+  }
+  return output.str();
+}
+
+std::string format_pe_string_table_report(const PeResourcePayloadReport& payload_report) {
+  std::ostringstream output;
+  output << "string_table_resource_count: " << payload_report.string_table_resources.size() << "\n";
+  output << "string_tables:\n";
+  for (const auto& table : payload_report.string_table_resources) {
+    output << "  - name_id: " << table.source_leaf.name_id << "\n";
+    output << "    language_id: " << table.source_leaf.language_id << "\n";
+    output << "    entries:\n";
+    for (const auto& entry : table.entries) {
+      output << "      - id: " << entry.string_id << "\n";
+      output << "        text: " << entry.text << "\n";
+    }
+  }
+  return output.str();
+}
+
+std::string format_pe_resource_payload_report(const PeResourcePayloadReport& payload_report) {
+  std::ostringstream output;
+  output << "# Caesar II Win95 PE Resource Payload Report\n";
+  output << format_pe_version_resource_report(payload_report);
+  output << format_pe_string_table_report(payload_report);
+  output << "skipped_resource_count: " << payload_report.skipped_resources.size() << "\n";
+  output << "skipped_resources:\n";
+  for (const auto& skipped : payload_report.skipped_resources) {
+    output << "  - type: ";
+    if (skipped.source_leaf.type_uses_string_name) {
+      output << "name:" << skipped.source_leaf.type_string_name << "\n";
+    } else {
+      output << "id:" << skipped.source_leaf.type_id;
+      if (!skipped.source_leaf.type_label.empty()) {
+        output << " (" << skipped.source_leaf.type_label << ")";
+      }
+      output << "\n";
+    }
+    output << "    name: " << (skipped.source_leaf.name_uses_string_name ? "name:" + skipped.source_leaf.name_string
+                                                                          : "id:" + std::to_string(skipped.source_leaf.name_id))
+           << "\n";
+    output << "    language_id: " << skipped.source_leaf.language_id << "\n";
+    output << "    reason: " << skipped.reason << "\n";
+  }
   return output.str();
 }
 
