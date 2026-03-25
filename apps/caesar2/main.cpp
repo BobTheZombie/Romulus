@@ -36,6 +36,8 @@ struct ParsedArguments {
   std::optional<std::string> view_tile_file;
   std::optional<std::string> view_palette_file;
   std::optional<std::string> probe_lbm_file;
+  std::optional<std::string> export_lbm_file;
+  std::optional<std::string> view_lbm_file;
   bool index_zero_transparent = false;
   std::optional<std::string> data_dir;
 };
@@ -186,6 +188,26 @@ struct ParsedArguments {
       continue;
     }
 
+    if (argument == "--export-lbm-file") {
+      if (index + 1 >= argc) {
+        romulus::core::log_error("Missing value after --export-lbm-file.");
+        return std::nullopt;
+      }
+
+      parsed.export_lbm_file = argv[++index];
+      continue;
+    }
+
+    if (argument == "--view-lbm-file") {
+      if (index + 1 >= argc) {
+        romulus::core::log_error("Missing value after --view-lbm-file.");
+        return std::nullopt;
+      }
+
+      parsed.view_lbm_file = argv[++index];
+      continue;
+    }
+
     romulus::core::log_error(std::string("Unknown argument: ") + std::string(argument));
     return std::nullopt;
   }
@@ -216,6 +238,31 @@ struct ParsedArguments {
 
   if (has_any_export_arg && has_any_view_arg) {
     romulus::core::log_error("Image export and image viewer modes are mutually exclusive.");
+    return std::nullopt;
+  }
+
+  const bool has_lbm_export_arg =
+      parsed.export_lbm_file.has_value() || (parsed.export_output_file.has_value() && !has_any_export_arg);
+  if (has_lbm_export_arg) {
+    if (!parsed.export_lbm_file.has_value() || !parsed.export_output_file.has_value()) {
+      romulus::core::log_error("LBM export requires --export-lbm-file and --export-output.");
+      return std::nullopt;
+    }
+  }
+
+  const bool has_lbm_view_arg = parsed.view_lbm_file.has_value();
+  if (has_lbm_view_arg && parsed.view_tile_file.has_value()) {
+    romulus::core::log_error("--view-lbm-file and --view-tile-file are mutually exclusive.");
+    return std::nullopt;
+  }
+
+  if (has_lbm_export_arg && (has_any_export_arg || has_any_view_arg || has_lbm_view_arg)) {
+    romulus::core::log_error("LBM export mode is mutually exclusive with tile export/view and LBM viewer modes.");
+    return std::nullopt;
+  }
+
+  if (has_lbm_view_arg && (has_any_export_arg || has_any_view_arg || has_lbm_export_arg)) {
+    romulus::core::log_error("LBM viewer mode is mutually exclusive with tile export/view and LBM export modes.");
     return std::nullopt;
   }
 
@@ -253,7 +300,8 @@ struct ParsedArguments {
     const bool has_other_mode = parsed.inventory_manifest || parsed.probe_file.has_value() ||
                                 !parsed.probe_candidates.empty() || parsed.match_signature.has_value() ||
                                 !parsed.classify_candidates.empty() || parsed.export_tile_file.has_value() ||
-                                parsed.view_tile_file.has_value();
+                                parsed.view_tile_file.has_value() || parsed.export_lbm_file.has_value() ||
+                                parsed.view_lbm_file.has_value();
     if (has_other_mode) {
       romulus::core::log_error("--probe-lbm is mutually exclusive with other command modes.");
       return std::nullopt;
@@ -463,6 +511,63 @@ int run_lbm_probe(const std::filesystem::path& data_root, const std::string& lbm
   return 0;
 }
 
+[[nodiscard]] std::optional<romulus::data::RgbaImage> decode_lbm_to_rgba(const std::filesystem::path& data_root,
+                                                                          const std::string& lbm_file_arg) {
+  const auto lbm_path = resolve_data_relative(data_root, lbm_file_arg);
+  const auto loaded = romulus::data::load_file_to_memory(lbm_path);
+  if (!loaded.ok()) {
+    romulus::core::log_error(loaded.error.value().message);
+    return std::nullopt;
+  }
+
+  const auto parsed = romulus::data::parse_ilbm_image(loaded.value.value().bytes);
+  if (!parsed.ok()) {
+    romulus::core::log_error(parsed.error.value().message);
+    return std::nullopt;
+  }
+
+  const auto rgba = romulus::data::convert_ilbm_to_rgba(parsed.value.value());
+  if (!rgba.ok()) {
+    romulus::core::log_error(rgba.error.value().message);
+    return std::nullopt;
+  }
+
+  return rgba.value.value();
+}
+
+int run_lbm_export(const std::filesystem::path& data_root,
+                   const std::string& lbm_file_arg,
+                   const std::string& output_file_arg) {
+  const auto output_path = resolve_data_relative(data_root, output_file_arg);
+  const auto rgba = decode_lbm_to_rgba(data_root, lbm_file_arg);
+  if (!rgba.has_value()) {
+    return 1;
+  }
+
+  const auto exported = romulus::data::export_rgba_image_as_ppm(rgba.value(), output_path);
+  if (!exported.ok()) {
+    romulus::core::log_error(exported.error->message);
+    return 1;
+  }
+
+  romulus::core::log_info("Exported decoded LBM to: " + output_path.string());
+  return 0;
+}
+
+int run_lbm_viewer(const std::filesystem::path& data_root, const std::string& lbm_file_arg, bool smoke_test) {
+  const auto rgba = decode_lbm_to_rgba(data_root, lbm_file_arg);
+  if (!rgba.has_value()) {
+    return 1;
+  }
+
+  romulus::platform::Application app({
+      .smoke_test = smoke_test,
+      .data_root = data_root,
+      .debug_view_image = rgba,
+  });
+  return app.run();
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -472,6 +577,8 @@ int main(int argc, char* argv[]) {
         "Usage: caesar2 [--smoke-test] [--data-dir <path>] [--inventory-manifest] [--manifest-out <path>] "
         "[--probe-file <path>] [--probe-candidate <path>] [--match-signature <path>] "
         "[--probe-lbm <path>] "
+        "[--export-lbm-file <path> --export-output <path>] "
+        "[--view-lbm-file <path>] "
         "[--classify-candidate <path> ...] [--classify-include-secondary] "
         "[--export-tile-file <path> --export-palette-file <path> --export-output <path> "
         "[--index-zero-transparent]] [--view-tile-file <path> --view-palette-file <path> "
@@ -493,6 +600,14 @@ int main(int argc, char* argv[]) {
 
   if (parsed->probe_lbm_file.has_value()) {
     return run_lbm_probe(data_root, parsed->probe_lbm_file.value());
+  }
+
+  if (parsed->export_lbm_file.has_value()) {
+    return run_lbm_export(data_root, parsed->export_lbm_file.value(), parsed->export_output_file.value());
+  }
+
+  if (parsed->view_lbm_file.has_value()) {
+    return run_lbm_viewer(data_root, parsed->view_lbm_file.value(), parsed->smoke_test);
   }
 
   if (!parsed->probe_candidates.empty()) {

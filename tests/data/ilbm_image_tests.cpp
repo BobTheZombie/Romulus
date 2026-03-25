@@ -195,6 +195,51 @@ int test_lbm_report_stable_heading() {
                      "report should include palette truncation text");
 }
 
+int test_convert_ilbm_to_rgba_success() {
+  const auto parsed = romulus::data::parse_ilbm_image(make_fixture_ilbm());
+  if (assert_true(parsed.ok(), "RGBA conversion test requires valid ILBM") != 0) {
+    return 1;
+  }
+
+  const auto rgba = romulus::data::convert_ilbm_to_rgba(parsed.value.value());
+  if (assert_true(rgba.ok(), "ILBM with matching palette indices should convert to RGBA") != 0) {
+    return 1;
+  }
+
+  const auto& image = rgba.value.value();
+  if (assert_true(image.width == 2 && image.height == 2, "converted RGBA dimensions should match ILBM") != 0) {
+    return 1;
+  }
+
+  if (assert_true(image.pixels_rgba.size() == 16, "2x2 RGBA image should have 16 bytes") != 0) {
+    return 1;
+  }
+
+  return assert_true(
+      image.pixels_rgba[0] == 20 && image.pixels_rgba[1] == 30 && image.pixels_rgba[2] == 40 &&
+          image.pixels_rgba[3] == 255 && image.pixels_rgba[4] == 40 && image.pixels_rgba[5] == 50 &&
+          image.pixels_rgba[6] == 60 && image.pixels_rgba[7] == 255,
+      "converted RGBA bytes should follow decoded indexed pixels and CMAP entries");
+}
+
+int test_convert_ilbm_to_rgba_rejects_missing_palette_index() {
+  auto parsed = romulus::data::parse_ilbm_image(make_fixture_ilbm());
+  if (assert_true(parsed.ok(), "palette index failure test requires valid ILBM") != 0) {
+    return 1;
+  }
+
+  auto image = parsed.value.value();
+  image.palette_entries.resize(3);
+  const auto rgba = romulus::data::convert_ilbm_to_rgba(image);
+  if (assert_true(!rgba.ok(), "missing CMAP entry should fail conversion") != 0) {
+    return 1;
+  }
+
+  return assert_true(rgba.error.has_value() &&
+                         rgba.error->code == romulus::data::ParseErrorCode::InvalidFormat,
+                     "missing CMAP entry should produce invalid format error");
+}
+
 }  // namespace
 
 int main() {
@@ -214,6 +259,12 @@ int main() {
     return EXIT_FAILURE;
   }
   if (test_lbm_report_stable_heading() != 0) {
+    return EXIT_FAILURE;
+  }
+  if (test_convert_ilbm_to_rgba_success() != 0) {
+    return EXIT_FAILURE;
+  }
+  if (test_convert_ilbm_to_rgba_rejects_missing_palette_index() != 0) {
     return EXIT_FAILURE;
   }
   return EXIT_SUCCESS;
