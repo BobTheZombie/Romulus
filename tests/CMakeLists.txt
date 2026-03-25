@@ -65,3 +65,8 @@ add_test(NAME romulus_signature_registry_tests COMMAND romulus_signature_registr
 add_executable(romulus_batch_classification_tests data/batch_classification_tests.cpp)
 target_link_libraries(romulus_batch_classification_tests PRIVATE romulus::data)
 add_test(NAME romulus_batch_classification_tests COMMAND romulus_batch_classification_tests)
+
+
+add_executable(romulus_startup_tests platform/startup_tests.cpp)
+target_link_libraries(romulus_startup_tests PRIVATE romulus::platform)
+add_test(NAME romulus_startup_tests COMMAND romulus_startup_tests)

@@ -34,10 +34,11 @@ void write_file(const std::filesystem::path& path, const std::string& contents) 
 int test_manifest_discovers_required_and_other_files() {
   const auto root = make_temp_dir("discover");
 
-  write_file(root / "C2.EXE", "exe");
-  write_file(root / "C2.CFG", "config");
+  write_file(root / "CAESAR2.EXE", "exe");
+  write_file(root / "CAESAR2.INI", "config");
   std::filesystem::create_directories(root / "DATA");
-  write_file(root / "DATA/TEXT.ENG", "english");
+  std::filesystem::create_directories(root / "SAVE");
+  write_file(root / "HISTORY.DAT", "history");
 
   write_file(root / "DATA/EXTRA.TXT", "extra");
   write_file(root / "README.LOCAL", "notes");
@@ -61,8 +62,8 @@ int test_manifest_discovers_required_and_other_files() {
   bool found_required_cfg = false;
   bool found_extra_file = false;
   for (const auto& entry : manifest.entries) {
-    if (entry.relative_path.generic_string() == "C2.CFG") {
-      found_required_cfg = entry.is_required_known_entry && entry.filename == "C2.CFG" && entry.size_bytes == 6;
+    if (entry.relative_path.generic_string() == "CAESAR2.INI") {
+      found_required_cfg = entry.is_required_known_entry && entry.filename == "CAESAR2.INI" && entry.size_bytes == 6;
     }
 
     if (entry.relative_path.generic_string() == "DATA/EXTRA.TXT") {
@@ -80,10 +81,11 @@ int test_manifest_discovers_required_and_other_files() {
 int test_manifest_format_is_stable_and_sorted() {
   const auto root = make_temp_dir("format");
 
-  write_file(root / "C2.EXE", "exe");
-  write_file(root / "C2.CFG", "cfg");
+  write_file(root / "CAESAR2.EXE", "exe");
+  write_file(root / "CAESAR2.INI", "cfg");
   std::filesystem::create_directories(root / "DATA");
-  write_file(root / "DATA/TEXT.ENG", "eng");
+  std::filesystem::create_directories(root / "SAVE");
+  write_file(root / "HISTORY.DAT", "his");
   write_file(root / "ZZZ.DAT", "zzz");
   write_file(root / "AAA.DAT", "aaa");
 
@@ -98,7 +100,7 @@ int test_manifest_format_is_stable_and_sorted() {
 
   const auto aaa_pos = text.find("discovered|AAA.DAT|AAA.DAT|3");
   const auto zzz_pos = text.find("discovered|ZZZ.DAT|ZZZ.DAT|3");
-  const auto required_pos = text.find("required|C2.CFG|C2.CFG|3");
+  const auto required_pos = text.find("required|CAESAR2.INI|CAESAR2.INI|3");
 
   if (assert_true(aaa_pos != std::string::npos && zzz_pos != std::string::npos && required_pos != std::string::npos,
                   "manifest text should contain expected rows") != 0) {

@@ -24,6 +24,7 @@ struct DataRootValidationResult {
 };
 
 [[nodiscard]] const std::vector<RequiredEntry>& required_entries();
+[[nodiscard]] const std::vector<RequiredEntry>& expected_optional_entries();
 [[nodiscard]] std::filesystem::path resolve_data_root(std::string_view data_root_argument);
 [[nodiscard]] DataRootValidationResult validate_data_root(const std::filesystem::path& data_root);
 [[nodiscard]] std::string format_validation_error(const DataRootValidationResult& validation);

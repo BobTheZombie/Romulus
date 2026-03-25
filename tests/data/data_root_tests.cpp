@@ -31,6 +31,17 @@ void write_file(const std::filesystem::path& path) {
   stream << "test";
 }
 
+void create_valid_win95_layout(const std::filesystem::path& root) {
+  for (const auto& entry : romulus::data::required_entries()) {
+    const auto target = root / entry.relative_path;
+    if (entry.type == romulus::data::RequiredEntryType::Directory) {
+      std::filesystem::create_directories(target);
+    } else {
+      write_file(target);
+    }
+  }
+}
+
 int test_relative_data_root_resolution() {
   const auto cwd = std::filesystem::current_path();
   const auto resolved = romulus::data::resolve_data_root("./assets/../assets/data");
@@ -50,52 +61,48 @@ int test_missing_path_error_message() {
                      "missing path message should mention that the path does not exist");
 }
 
-int test_missing_required_files_are_reported() {
-  const auto root = make_temp_dir("missing-files");
-
-  const auto& required = romulus::data::required_entries();
-  if (required.empty()) {
-    return assert_true(false, "required entries list must not be empty");
-  }
-
-  const auto first = required.front();
-  for (std::size_t index = 1; index < required.size(); ++index) {
-    const auto& entry = required[index];
-    const auto target = root / entry.relative_path;
-    if (entry.type == romulus::data::RequiredEntryType::Directory) {
-      std::filesystem::create_directories(target);
-    } else {
-      write_file(target);
-    }
-  }
+int test_missing_required_file_fails_cleanly() {
+  const auto root = make_temp_dir("missing-required-file");
+  create_valid_win95_layout(root);
+  std::filesystem::remove(root / "CAESAR2.EXE");
 
   const auto validation = romulus::data::validate_data_root(root);
-  if (assert_true(!validation.ok, "validation should fail when one required entry is missing") != 0) {
+  if (assert_true(!validation.ok, "validation should fail if CAESAR2.EXE is missing") != 0) {
     std::filesystem::remove_all(root);
     return 1;
   }
 
   const auto message = romulus::data::format_validation_error(validation);
-  const bool mentions_missing = message.find(first.relative_path.string()) != std::string::npos;
-  const int status = assert_true(mentions_missing, "error message should list missing relative path");
+  const int status = assert_true(message.find("CAESAR2.EXE") != std::string::npos,
+                                 "error message should include missing required file");
+  std::filesystem::remove_all(root);
+  return status;
+}
 
+int test_missing_required_directory_fails_cleanly() {
+  const auto root = make_temp_dir("missing-required-directory");
+  create_valid_win95_layout(root);
+  std::filesystem::remove_all(root / "SAVE");
+
+  const auto validation = romulus::data::validate_data_root(root);
+  if (assert_true(!validation.ok, "validation should fail if SAVE directory is missing") != 0) {
+    std::filesystem::remove_all(root);
+    return 1;
+  }
+
+  const auto message = romulus::data::format_validation_error(validation);
+  const int status = assert_true(message.find("SAVE") != std::string::npos,
+                                 "error message should include missing required directory");
   std::filesystem::remove_all(root);
   return status;
 }
 
 int test_valid_root_passes_validation() {
   const auto root = make_temp_dir("valid");
-  for (const auto& entry : romulus::data::required_entries()) {
-    const auto target = root / entry.relative_path;
-    if (entry.type == romulus::data::RequiredEntryType::Directory) {
-      std::filesystem::create_directories(target);
-    } else {
-      write_file(target);
-    }
-  }
+  create_valid_win95_layout(root);
 
   const auto validation = romulus::data::validate_data_root(root);
-  const int status = assert_true(validation.ok, "validation should pass when all required entries exist");
+  const int status = assert_true(validation.ok, "validation should pass for required Win95 layout");
 
   std::filesystem::remove_all(root);
   return status;
@@ -112,7 +119,11 @@ int main() {
     return EXIT_FAILURE;
   }
 
-  if (test_missing_required_files_are_reported() != 0) {
+  if (test_missing_required_file_fails_cleanly() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_missing_required_directory_fails_cleanly() != 0) {
     return EXIT_FAILURE;
   }
 

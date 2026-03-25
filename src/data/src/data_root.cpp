@@ -6,10 +6,18 @@ namespace romulus::data {
 namespace {
 
 const std::vector<RequiredEntry> kRequiredEntries = {
-    {.relative_path = "C2.EXE", .type = RequiredEntryType::File},
-    {.relative_path = "C2.CFG", .type = RequiredEntryType::File},
+    {.relative_path = "CAESAR2.EXE", .type = RequiredEntryType::File},
+    {.relative_path = "CAESAR2.INI", .type = RequiredEntryType::File},
     {.relative_path = "DATA", .type = RequiredEntryType::Directory},
-    {.relative_path = "DATA/TEXT.ENG", .type = RequiredEntryType::File},
+    {.relative_path = "SAVE", .type = RequiredEntryType::Directory},
+    {.relative_path = "HISTORY.DAT", .type = RequiredEntryType::File},
+};
+
+const std::vector<RequiredEntry> kExpectedOptionalEntries = {
+    {.relative_path = "DATA0", .type = RequiredEntryType::Directory},
+    {.relative_path = "RAW", .type = RequiredEntryType::Directory},
+    {.relative_path = "SMK", .type = RequiredEntryType::Directory},
+    {.relative_path = "CAESAR2.INF", .type = RequiredEntryType::File},
 };
 
 [[nodiscard]] bool entry_exists_with_type(const std::filesystem::path& root, const RequiredEntry& entry) {
@@ -31,6 +39,10 @@ const std::vector<RequiredEntry> kRequiredEntries = {
 
 const std::vector<RequiredEntry>& required_entries() {
   return kRequiredEntries;
+}
+
+const std::vector<RequiredEntry>& expected_optional_entries() {
+  return kExpectedOptionalEntries;
 }
 
 std::filesystem::path resolve_data_root(std::string_view data_root_argument) {
