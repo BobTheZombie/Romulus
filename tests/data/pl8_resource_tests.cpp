@@ -1,6 +1,9 @@
 #include "romulus/data/pl8_resource.h"
 
 #include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -27,6 +30,11 @@ std::vector<std::uint8_t> make_supported_pl8_fixture() {
   }
 
   return bytes;
+}
+
+std::filesystem::path make_temp_test_dir() {
+  const auto unique = std::to_string(std::rand()) + "_" + std::to_string(std::rand());
+  return std::filesystem::temp_directory_path() / ("romulus_pl8_resource_tests_" + unique);
 }
 
 int test_parse_pl8_success() {
@@ -105,9 +113,73 @@ int test_format_pl8_report_is_stable() {
                      "report should include deterministic preview entry");
 }
 
+int test_batch_probe_reports_supported_and_unsupported_layouts() {
+  const auto temp_dir = make_temp_test_dir();
+  std::filesystem::create_directories(temp_dir);
+
+  {
+    std::ofstream supported(temp_dir / "GOOD.PL8", std::ios::binary);
+    const auto bytes = make_supported_pl8_fixture();
+    supported.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+  }
+
+  {
+    std::ofstream unsupported(temp_dir / "ODD.PL8", std::ios::binary);
+    unsupported.write("12345", 5);
+  }
+
+  const auto result = romulus::data::probe_pl8_files(temp_dir, {"GOOD.PL8", "ODD.PL8"});
+  if (assert_true(result.ok(), "batch probe should succeed for supported and unsupported layouts") != 0) {
+    std::filesystem::remove_all(temp_dir);
+    return 1;
+  }
+
+  const auto& files = result.value->files;
+  if (assert_true(files.size() == 2, "batch probe should report two files") != 0) {
+    std::filesystem::remove_all(temp_dir);
+    return 1;
+  }
+
+  if (assert_true(files[0].matches_supported_palette_layout, "768-byte file should be marked supported") != 0) {
+    std::filesystem::remove_all(temp_dir);
+    return 1;
+  }
+
+  if (assert_true(!files[1].matches_supported_palette_layout, "non-768-byte file should be marked unsupported") != 0) {
+    std::filesystem::remove_all(temp_dir);
+    return 1;
+  }
+
+  const auto formatted = romulus::data::format_pl8_batch_report(result.value.value(), 2);
+  if (assert_true(formatted.find("path: GOOD.PL8") != std::string::npos, "report should include first path") != 0) {
+    std::filesystem::remove_all(temp_dir);
+    return 1;
+  }
+
+  if (assert_true(formatted.find("palette_summary: palette_entries=256 preview=[0:(0,0,255), 1:(1,2,254)]") !=
+                      std::string::npos,
+                  "supported file should include deterministic compact palette preview") != 0) {
+    std::filesystem::remove_all(temp_dir);
+    return 1;
+  }
+
+  if (assert_true(
+          formatted.find("unsupported_summary: unsupported_layout: payload_size=5 expected_payload_size=768") !=
+              std::string::npos,
+          "unsupported file should include deterministic unsupported summary") != 0) {
+    std::filesystem::remove_all(temp_dir);
+    return 1;
+  }
+
+  std::filesystem::remove_all(temp_dir);
+  return 0;
+}
+
 }  // namespace
 
 int main() {
+  std::srand(1816);
+
   if (test_parse_pl8_success() != 0) {
     return 1;
   }
@@ -117,6 +189,10 @@ int main() {
   }
 
   if (test_format_pl8_report_is_stable() != 0) {
+    return 1;
+  }
+
+  if (test_batch_probe_reports_supported_and_unsupported_layouts() != 0) {
     return 1;
   }
 
