@@ -28,11 +28,41 @@ struct Win95PackContainerEntry {
   std::size_t offset = 0;
   std::size_t size = 0;
   std::size_t end_offset = 0;
+  std::string signature_hex;
+  std::string signature_ascii;
+  std::string classification_hint;
+  bool has_recognizable_signature = false;
+};
+
+struct Win95PackEntrySizeBuckets {
+  std::size_t tiny_bytes_0_to_255 = 0;
+  std::size_t small_bytes_256_to_4095 = 0;
+  std::size_t medium_bytes_4096_to_65535 = 0;
+  std::size_t large_bytes_65536_plus = 0;
+};
+
+struct Win95PackMagicFrequency {
+  std::string signature;
+  std::size_t count = 0;
+};
+
+struct Win95PackContainerSummary {
+  std::size_t entry_count = 0;
+  std::size_t total_payload_bytes = 0;
+  std::size_t recognizable_signature_count = 0;
+  Win95PackEntrySizeBuckets size_buckets;
+  std::vector<Win95PackMagicFrequency> magic_frequencies;
 };
 
 struct Win95PackContainerResource {
   Win95PackContainerHeader header;
   std::vector<Win95PackContainerEntry> entries;
+  Win95PackContainerSummary summary;
+};
+
+struct Win95PackReportOptions {
+  std::size_t preview_entry_limit = 8;
+  bool include_all_entries = false;
 };
 
 struct Win95DataContainerProbeError {
@@ -60,6 +90,7 @@ constexpr std::size_t k_default_win95_container_max_file_load_bytes = 64 * 1024 
     std::size_t max_file_load_bytes = k_default_win95_container_max_file_load_bytes);
 
 [[nodiscard]] std::string format_win95_data_container_report(const Win95PackContainerResource& resource,
-                                                             std::string_view source_label = "");
+                                                             std::string_view source_label = "",
+                                                             Win95PackReportOptions options = {});
 
 }  // namespace romulus::data

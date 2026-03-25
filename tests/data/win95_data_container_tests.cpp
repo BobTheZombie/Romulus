@@ -47,6 +47,30 @@ std::vector<std::uint8_t> make_valid_pack_fixture() {
   return bytes;
 }
 
+std::vector<std::uint8_t> make_signature_rich_pack_fixture() {
+  std::vector<std::uint8_t> bytes;
+  bytes.push_back('P');
+  bytes.push_back('A');
+  bytes.push_back('C');
+  bytes.push_back('K');
+  append_u32_le(bytes, 4);
+
+  append_u32_le(bytes, 40);
+  append_u32_le(bytes, 12);
+  append_u32_le(bytes, 52);
+  append_u32_le(bytes, 12);
+  append_u32_le(bytes, 64);
+  append_u32_le(bytes, 8);
+  append_u32_le(bytes, 72);
+  append_u32_le(bytes, 4);
+
+  bytes.insert(bytes.end(), {'F', 'O', 'R', 'M', 'I', 'L', 'B', 'M', 0x00, 0x01, 0x02, 0x03});
+  bytes.insert(bytes.end(), {'N', 'A', 'M', 'E', '=', 'R', 'O', 'M', 'E', '\n', 'X', '\n'});
+  bytes.insert(bytes.end(), {0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80});
+  bytes.insert(bytes.end(), {0xAA, 0xBB, 0xCC, 0xDD});
+  return bytes;
+}
+
 int test_parse_valid_pack_container() {
   const auto bytes = make_valid_pack_fixture();
   const auto parsed = romulus::data::parse_win95_pack_container(bytes);
@@ -69,6 +93,11 @@ int test_parse_valid_pack_container() {
 
   if (assert_true(parsed.value->entries[0].offset == 24 && parsed.value->entries[0].size == 4,
                   "first entry range should decode") != 0) {
+    return 1;
+  }
+
+  if (assert_true(parsed.value->entries[0].signature_hex == "10 11 12 13",
+                  "entry signature hex should be collected") != 0) {
     return 1;
   }
 
@@ -135,8 +164,101 @@ int test_stable_report_formatting() {
     return 1;
   }
 
+  if (assert_true(report.find("entries_preview: showing 2 of 2") != std::string::npos,
+                  "report should show bounded preview header") != 0) {
+    return 1;
+  }
+
   return assert_true(report.find("index: 1 offset=28 size=4 end_offset=32") != std::string::npos,
                      "report should include deterministic entry lines");
+}
+
+int test_reports_summary_and_classification_hints() {
+  const auto bytes = make_signature_rich_pack_fixture();
+  const auto parsed = romulus::data::parse_win95_pack_container(bytes);
+  if (assert_true(parsed.ok(), "summary test requires valid parse") != 0) {
+    return 1;
+  }
+
+  if (assert_true(parsed.value->summary.entry_count == 4, "summary entry count should be populated") != 0) {
+    return 1;
+  }
+
+  if (assert_true(parsed.value->summary.total_payload_bytes == 36, "summary payload bytes should be stable") != 0) {
+    return 1;
+  }
+
+  if (assert_true(parsed.value->entries[0].classification_hint == "possible-ilbm", "FORM entries should hint ILBM") != 0) {
+    return 1;
+  }
+
+  if (assert_true(parsed.value->entries[1].classification_hint == "text-like", "printable entries should hint text") != 0) {
+    return 1;
+  }
+
+  if (assert_true(parsed.value->entries[2].classification_hint == "opaque-binary", "opaque entries should remain opaque") != 0) {
+    return 1;
+  }
+
+  if (assert_true(parsed.value->summary.recognizable_signature_count == 2, "recognizable signature tally should be bounded") != 0) {
+    return 1;
+  }
+
+  const auto report = romulus::data::format_win95_data_container_report(
+      parsed.value.value(),
+      "DATA",
+      romulus::data::Win95PackReportOptions{
+          .preview_entry_limit = 2,
+          .include_all_entries = false,
+      });
+  if (assert_true(report.find("entries_preview: showing 2 of 4") != std::string::npos,
+                  "report should obey preview cap") != 0) {
+    return 1;
+  }
+
+  if (assert_true(report.find("entries_preview_truncated: yes") != std::string::npos,
+                  "report should declare truncation") != 0) {
+    return 1;
+  }
+
+  return assert_true(report.find("signature_frequency:") != std::string::npos,
+                     "report should include signature frequency summary");
+}
+
+int test_extended_preview_includes_all_entries() {
+  const auto bytes = make_signature_rich_pack_fixture();
+  const auto parsed = romulus::data::parse_win95_pack_container(bytes);
+  if (assert_true(parsed.ok(), "extended preview requires valid parse") != 0) {
+    return 1;
+  }
+
+  const auto report = romulus::data::format_win95_data_container_report(
+      parsed.value.value(),
+      "DATA",
+      romulus::data::Win95PackReportOptions{
+          .preview_entry_limit = 1,
+          .include_all_entries = true,
+      });
+  if (assert_true(report.find("entries_preview: showing 4 of 4") != std::string::npos,
+                  "extended mode should include all entries") != 0) {
+    return 1;
+  }
+
+  return assert_true(report.find("entries_preview_truncated: yes") == std::string::npos,
+                     "extended mode should not report truncation");
+}
+
+int test_rejects_truncated_entry_payload_range() {
+  auto bytes = make_valid_pack_fixture();
+  bytes[9] = 0x01;
+
+  const auto parsed = romulus::data::parse_win95_pack_container(bytes);
+  if (assert_true(!parsed.ok(), "out-of-bounds entry should fail") != 0) {
+    return 1;
+  }
+
+  return assert_true(parsed.error.has_value() && parsed.error->offset == 8,
+                     "entry payload range failure should report entry record offset");
 }
 
 }  // namespace
@@ -159,6 +281,18 @@ int main() {
   }
 
   if (test_stable_report_formatting() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_reports_summary_and_classification_hints() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_extended_preview_includes_all_entries() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_rejects_truncated_entry_payload_range() != 0) {
     return EXIT_FAILURE;
   }
 
