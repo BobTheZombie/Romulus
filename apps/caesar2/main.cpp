@@ -634,6 +634,12 @@ int run_exe_probe(const std::filesystem::path& data_root, const std::string& exe
     return 1;
   }
 
+  const auto payloads = romulus::data::decode_pe_resource_payloads(loaded.value.value().bytes, parsed.value.value());
+  if (payloads.ok()) {
+    std::cout << romulus::data::format_pe_exe_report(parsed.value.value(), payloads.value.value());
+    return 0;
+  }
+
   std::cout << romulus::data::format_pe_exe_report(parsed.value.value());
   return 0;
 }

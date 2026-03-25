@@ -411,6 +411,94 @@ int test_payload_report_output_is_stable() {
                      "payload report should include skipped reason");
 }
 
+int test_enriched_exe_report_includes_version_summary() {
+  romulus::data::PeExeResource resource;
+  resource.image_base = 0x400000;
+  resource.entry_point_rva = 0x1000;
+  resource.section_count = 3;
+  resource.resource_report.top_level_type_count = 2;
+  resource.resource_report.leaf_count = 4;
+
+  romulus::data::PeResourcePayloadReport payloads;
+  payloads.version_resources.push_back(
+      {.source_leaf = {.name_id = 1, .language_id = 1033},
+       .has_fixed_file_info = true,
+       .file_version_ms = 0x00020003,
+       .file_version_ls = 0x00040005,
+       .product_version_ms = 0x00060007,
+       .product_version_ls = 0x00080009,
+       .string_values = {{"CompanyName", "Impressions"}, {"FileDescription", "Caesar II"}, {"ProductName", "C2"}}});
+
+  const auto text = romulus::data::format_pe_exe_report(resource, payloads);
+  if (assert_true(text.find("resource_payload_summary:") != std::string::npos,
+                  "enriched EXE report should include payload summary") != 0) {
+    return 1;
+  }
+  if (assert_true(text.find("file_version: 2.3.4.5") != std::string::npos,
+                  "enriched EXE report should include formatted file version") != 0) {
+    return 1;
+  }
+  return assert_true(text.find("CompanyName: Impressions") != std::string::npos,
+                     "enriched EXE report should include key VERSION string fields");
+}
+
+int test_enriched_exe_report_includes_string_table_summary() {
+  romulus::data::PeExeResource resource;
+  romulus::data::PeResourcePayloadReport payloads;
+  payloads.string_table_resources.push_back(
+      {.source_leaf = {.name_id = 2, .language_id = 1033}, .entries = {{16, "Alpha"}, {18, "Beta"}}});
+  payloads.string_table_resources.push_back(
+      {.source_leaf = {.name_id = 4, .language_id = 1033}, .entries = {{48, "Gamma"}}});
+
+  const auto text = romulus::data::format_pe_exe_report(resource, payloads);
+  if (assert_true(text.find("string_table_resource_count: 2") != std::string::npos,
+                  "enriched EXE report should include string table count") != 0) {
+    return 1;
+  }
+  if (assert_true(text.find("string_table_bundle_ids: 2, 4") != std::string::npos,
+                  "enriched EXE report should include bundle coverage") != 0) {
+    return 1;
+  }
+  if (assert_true(text.find("decoded_string_id_ranges: 16, 18, 48") != std::string::npos,
+                  "enriched EXE report should include decoded id ranges") != 0) {
+    return 1;
+  }
+  return assert_true(text.find("16: Alpha") != std::string::npos,
+                     "enriched EXE report should include bounded preview entries");
+}
+
+int test_enriched_exe_report_formatting_is_deterministic() {
+  romulus::data::PeExeResource resource;
+  romulus::data::PeResourcePayloadReport payloads;
+  payloads.string_table_resources.push_back(
+      {.source_leaf = {.name_id = 9, .language_id = 1033}, .entries = {{32, "A"}, {31, "B"}, {30, "C"}}});
+  payloads.skipped_resources.push_back(
+      {.source_leaf = {.type_id = 5, .type_label = "DIALOG", .name_id = 100, .language_id = 1033},
+       .reason = "unsupported resource type"});
+  payloads.skipped_resources.push_back(
+      {.source_leaf = {.type_id = 10, .type_label = "RCDATA", .name_id = 200, .language_id = 1033},
+       .reason = "unsupported resource type"});
+  payloads.skipped_resources.push_back(
+      {.source_leaf = {.type_id = 5, .type_label = "DIALOG", .name_id = 101, .language_id = 1033},
+       .reason = "unsupported resource type"});
+
+  const auto first = romulus::data::format_pe_exe_report(resource, payloads);
+  const auto second = romulus::data::format_pe_exe_report(resource, payloads);
+  if (assert_true(first == second, "enriched EXE report should be deterministic") != 0) {
+    return 1;
+  }
+  if (assert_true(first.find("decoded_string_id_ranges: 30-32") != std::string::npos,
+                  "enriched EXE report should normalize ranges in sorted order") != 0) {
+    return 1;
+  }
+  if (assert_true(first.find("id:5 (DIALOG): 2") != std::string::npos,
+                  "enriched EXE report should summarize skipped resources per type") != 0) {
+    return 1;
+  }
+  return assert_true(first.find("id:10 (RCDATA): 1") != std::string::npos,
+                     "enriched EXE report should include other skipped types");
+}
+
 }  // namespace
 
 int main() {
@@ -442,6 +530,15 @@ int main() {
     return EXIT_FAILURE;
   }
   if (test_payload_report_output_is_stable() != 0) {
+    return EXIT_FAILURE;
+  }
+  if (test_enriched_exe_report_includes_version_summary() != 0) {
+    return EXIT_FAILURE;
+  }
+  if (test_enriched_exe_report_includes_string_table_summary() != 0) {
+    return EXIT_FAILURE;
+  }
+  if (test_enriched_exe_report_formatting_is_deterministic() != 0) {
     return EXIT_FAILURE;
   }
 

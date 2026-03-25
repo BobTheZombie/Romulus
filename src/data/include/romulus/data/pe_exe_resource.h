@@ -116,6 +116,8 @@ struct PeExeResource {
 [[nodiscard]] ParseResult<PeResourcePayloadReport> decode_pe_resource_payloads(std::span<const std::uint8_t> bytes,
                                                                                const PeExeResource& resource);
 [[nodiscard]] std::string format_pe_exe_report(const PeExeResource& resource);
+[[nodiscard]] std::string format_pe_exe_report(const PeExeResource& resource,
+                                               const PeResourcePayloadReport& payload_report);
 [[nodiscard]] std::string format_pe_resource_report(const PeResourceSectionReport& resource_report);
 [[nodiscard]] std::string format_pe_version_resource_report(const PeResourcePayloadReport& payload_report);
 [[nodiscard]] std::string format_pe_string_table_report(const PeResourcePayloadReport& payload_report);
