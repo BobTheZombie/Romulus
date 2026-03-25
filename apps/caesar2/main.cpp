@@ -18,6 +18,7 @@
 #include "romulus/data/palette.h"
 #include "romulus/data/ilbm_image.h"
 #include "romulus/data/pl8_resource.h"
+#include "romulus/data/pe_exe_resource.h"
 #include "romulus/platform/application.h"
 
 namespace {
@@ -38,6 +39,7 @@ struct ParsedArguments {
   std::optional<std::string> view_palette_file;
   std::optional<std::string> probe_lbm_file;
   std::vector<std::string> probe_pl8_files;
+  std::optional<std::string> probe_exe_file;
   std::optional<std::string> export_lbm_file;
   std::optional<std::string> view_lbm_file;
   bool index_zero_transparent = false;
@@ -200,6 +202,16 @@ struct ParsedArguments {
       continue;
     }
 
+    if (argument == "--probe-exe") {
+      if (index + 1 >= argc) {
+        romulus::core::log_error("Missing value after --probe-exe.");
+        return std::nullopt;
+      }
+
+      parsed.probe_exe_file = argv[++index];
+      continue;
+    }
+
     if (argument == "--export-lbm-file") {
       if (index + 1 >= argc) {
         romulus::core::log_error("Missing value after --export-lbm-file.");
@@ -328,6 +340,19 @@ struct ParsedArguments {
                                 parsed.view_lbm_file.has_value() || parsed.probe_lbm_file.has_value();
     if (has_other_mode) {
       romulus::core::log_error("--probe-pl8 is mutually exclusive with other command modes.");
+      return std::nullopt;
+    }
+  }
+
+  if (parsed.probe_exe_file.has_value()) {
+    const bool has_other_mode = parsed.inventory_manifest || parsed.probe_file.has_value() ||
+                                !parsed.probe_candidates.empty() || parsed.match_signature.has_value() ||
+                                !parsed.classify_candidates.empty() || parsed.export_tile_file.has_value() ||
+                                parsed.view_tile_file.has_value() || parsed.export_lbm_file.has_value() ||
+                                parsed.view_lbm_file.has_value() || parsed.probe_lbm_file.has_value() ||
+                                !parsed.probe_pl8_files.empty();
+    if (has_other_mode) {
+      romulus::core::log_error("--probe-exe is mutually exclusive with other command modes.");
       return std::nullopt;
     }
   }
@@ -546,6 +571,24 @@ int run_pl8_probe(const std::filesystem::path& data_root, const std::vector<std:
   return 0;
 }
 
+int run_exe_probe(const std::filesystem::path& data_root, const std::string& exe_file_arg) {
+  const auto candidate = resolve_data_relative(data_root, exe_file_arg);
+  const auto loaded = romulus::data::load_file_to_memory(candidate);
+  if (!loaded.ok()) {
+    romulus::core::log_error(loaded.error.value().message);
+    return 1;
+  }
+
+  const auto parsed = romulus::data::parse_pe_exe_resource(loaded.value.value().bytes);
+  if (!parsed.ok()) {
+    romulus::core::log_error(parsed.error.value().message);
+    return 1;
+  }
+
+  std::cout << romulus::data::format_pe_exe_report(parsed.value.value());
+  return 0;
+}
+
 [[nodiscard]] std::optional<romulus::data::RgbaImage> decode_lbm_to_rgba(const std::filesystem::path& data_root,
                                                                           const std::string& lbm_file_arg) {
   const auto lbm_path = resolve_data_relative(data_root, lbm_file_arg);
@@ -612,6 +655,7 @@ int main(int argc, char* argv[]) {
         "Usage: caesar2 [--smoke-test] [--data-dir <path>] [--inventory-manifest] [--manifest-out <path>] "
         "[--probe-file <path>] [--probe-candidate <path>] [--match-signature <path>] "
         "[--probe-lbm <path>] [--probe-pl8 <path> ...] "
+        "[--probe-exe <path>] "
         "[--export-lbm-file <path> --export-output <path>] "
         "[--view-lbm-file <path>] "
         "[--classify-candidate <path> ...] [--classify-include-secondary] "
@@ -639,6 +683,10 @@ int main(int argc, char* argv[]) {
 
   if (!parsed->probe_pl8_files.empty()) {
     return run_pl8_probe(data_root, parsed->probe_pl8_files);
+  }
+
+  if (parsed->probe_exe_file.has_value()) {
+    return run_exe_probe(data_root, parsed->probe_exe_file.value());
   }
 
   if (parsed->export_lbm_file.has_value()) {
