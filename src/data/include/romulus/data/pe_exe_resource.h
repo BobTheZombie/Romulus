@@ -61,6 +61,42 @@ struct PeResourceSectionReport {
   PeResourceTree tree;
 };
 
+struct PeVersionResourceStringValue {
+  std::string key;
+  std::string value;
+};
+
+struct PeVersionResource {
+  PeResourceLeaf source_leaf;
+  bool has_fixed_file_info = false;
+  std::uint32_t file_version_ms = 0;
+  std::uint32_t file_version_ls = 0;
+  std::uint32_t product_version_ms = 0;
+  std::uint32_t product_version_ls = 0;
+  std::vector<PeVersionResourceStringValue> string_values;
+};
+
+struct PeStringTableEntry {
+  std::uint32_t string_id = 0;
+  std::string text;
+};
+
+struct PeStringTableResource {
+  PeResourceLeaf source_leaf;
+  std::vector<PeStringTableEntry> entries;
+};
+
+struct PeResourcePayloadSkip {
+  PeResourceLeaf source_leaf;
+  std::string reason;
+};
+
+struct PeResourcePayloadReport {
+  std::vector<PeVersionResource> version_resources;
+  std::vector<PeStringTableResource> string_table_resources;
+  std::vector<PeResourcePayloadSkip> skipped_resources;
+};
+
 struct PeExeResource {
   std::uint32_t image_base = 0;
   std::uint32_t entry_point_rva = 0;
@@ -75,7 +111,14 @@ struct PeExeResource {
 
 [[nodiscard]] ParseResult<PeExeResource> parse_pe_exe_resource(std::span<const std::byte> bytes);
 [[nodiscard]] ParseResult<PeExeResource> parse_pe_exe_resource(std::span<const std::uint8_t> bytes);
+[[nodiscard]] ParseResult<PeResourcePayloadReport> decode_pe_resource_payloads(std::span<const std::byte> bytes,
+                                                                               const PeExeResource& resource);
+[[nodiscard]] ParseResult<PeResourcePayloadReport> decode_pe_resource_payloads(std::span<const std::uint8_t> bytes,
+                                                                               const PeExeResource& resource);
 [[nodiscard]] std::string format_pe_exe_report(const PeExeResource& resource);
 [[nodiscard]] std::string format_pe_resource_report(const PeResourceSectionReport& resource_report);
+[[nodiscard]] std::string format_pe_version_resource_report(const PeResourcePayloadReport& payload_report);
+[[nodiscard]] std::string format_pe_string_table_report(const PeResourcePayloadReport& payload_report);
+[[nodiscard]] std::string format_pe_resource_payload_report(const PeResourcePayloadReport& payload_report);
 
 }  // namespace romulus::data

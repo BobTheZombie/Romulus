@@ -41,6 +41,7 @@ struct ParsedArguments {
   std::vector<std::string> probe_pl8_files;
   std::optional<std::string> probe_exe_file;
   std::optional<std::string> probe_exe_resources_file;
+  std::optional<std::string> probe_exe_resource_payloads_file;
   std::optional<std::string> export_lbm_file;
   std::optional<std::string> view_lbm_file;
   bool index_zero_transparent = false;
@@ -223,6 +224,16 @@ struct ParsedArguments {
       continue;
     }
 
+    if (argument == "--probe-exe-resource-payloads") {
+      if (index + 1 >= argc) {
+        romulus::core::log_error("Missing value after --probe-exe-resource-payloads.");
+        return std::nullopt;
+      }
+
+      parsed.probe_exe_resource_payloads_file = argv[++index];
+      continue;
+    }
+
     if (argument == "--export-lbm-file") {
       if (index + 1 >= argc) {
         romulus::core::log_error("Missing value after --export-lbm-file.");
@@ -377,6 +388,20 @@ struct ParsedArguments {
                                 !parsed.probe_pl8_files.empty() || parsed.probe_exe_file.has_value();
     if (has_other_mode) {
       romulus::core::log_error("--probe-exe-resources is mutually exclusive with other command modes.");
+      return std::nullopt;
+    }
+  }
+
+  if (parsed.probe_exe_resource_payloads_file.has_value()) {
+    const bool has_other_mode = parsed.inventory_manifest || parsed.probe_file.has_value() ||
+                                !parsed.probe_candidates.empty() || parsed.match_signature.has_value() ||
+                                !parsed.classify_candidates.empty() || parsed.export_tile_file.has_value() ||
+                                parsed.view_tile_file.has_value() || parsed.export_lbm_file.has_value() ||
+                                parsed.view_lbm_file.has_value() || parsed.probe_lbm_file.has_value() ||
+                                !parsed.probe_pl8_files.empty() || parsed.probe_exe_file.has_value() ||
+                                parsed.probe_exe_resources_file.has_value();
+    if (has_other_mode) {
+      romulus::core::log_error("--probe-exe-resource-payloads is mutually exclusive with other command modes.");
       return std::nullopt;
     }
   }
@@ -631,6 +656,30 @@ int run_exe_resource_probe(const std::filesystem::path& data_root, const std::st
   return 0;
 }
 
+int run_exe_resource_payload_probe(const std::filesystem::path& data_root, const std::string& exe_file_arg) {
+  const auto candidate = resolve_data_relative(data_root, exe_file_arg);
+  const auto loaded = romulus::data::load_file_to_memory(candidate);
+  if (!loaded.ok()) {
+    romulus::core::log_error(loaded.error.value().message);
+    return 1;
+  }
+
+  const auto parsed = romulus::data::parse_pe_exe_resource(loaded.value.value().bytes);
+  if (!parsed.ok()) {
+    romulus::core::log_error(parsed.error.value().message);
+    return 1;
+  }
+
+  const auto payloads = romulus::data::decode_pe_resource_payloads(loaded.value.value().bytes, parsed.value.value());
+  if (!payloads.ok()) {
+    romulus::core::log_error(payloads.error.value().message);
+    return 1;
+  }
+
+  std::cout << romulus::data::format_pe_resource_payload_report(payloads.value.value());
+  return 0;
+}
+
 [[nodiscard]] std::optional<romulus::data::RgbaImage> decode_lbm_to_rgba(const std::filesystem::path& data_root,
                                                                           const std::string& lbm_file_arg) {
   const auto lbm_path = resolve_data_relative(data_root, lbm_file_arg);
@@ -699,6 +748,7 @@ int main(int argc, char* argv[]) {
         "[--probe-lbm <path>] [--probe-pl8 <path> ...] "
         "[--probe-exe <path>] "
         "[--probe-exe-resources <path>] "
+        "[--probe-exe-resource-payloads <path>] "
         "[--export-lbm-file <path> --export-output <path>] "
         "[--view-lbm-file <path>] "
         "[--classify-candidate <path> ...] [--classify-include-secondary] "
@@ -734,6 +784,10 @@ int main(int argc, char* argv[]) {
 
   if (parsed->probe_exe_resources_file.has_value()) {
     return run_exe_resource_probe(data_root, parsed->probe_exe_resources_file.value());
+  }
+
+  if (parsed->probe_exe_resource_payloads_file.has_value()) {
+    return run_exe_resource_payload_probe(data_root, parsed->probe_exe_resource_payloads_file.value());
   }
 
   if (parsed->export_lbm_file.has_value()) {
