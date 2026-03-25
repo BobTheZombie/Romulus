@@ -5,6 +5,7 @@ add_library(romulus_data
   src/file_loader.cpp
   src/binary_probe.cpp
   src/candidate_probe.cpp
+  src/signature_registry.cpp
   src/palette.cpp
   src/indexed_image.cpp
   src/image_export.cpp

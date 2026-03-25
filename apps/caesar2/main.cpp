@@ -10,6 +10,7 @@
 #include "romulus/data/binary_probe.h"
 #include "romulus/data/candidate_probe.h"
 #include "romulus/data/data_root.h"
+#include "romulus/data/signature_registry.h"
 #include "romulus/data/file_inventory.h"
 #include "romulus/data/file_loader.h"
 #include "romulus/data/image_export.h"
@@ -25,6 +26,7 @@ struct ParsedArguments {
   std::optional<std::string> inventory_manifest_out;
   std::optional<std::string> probe_file;
   std::vector<std::string> probe_candidates;
+  std::optional<std::string> match_signature;
   std::optional<std::string> export_tile_file;
   std::optional<std::string> export_palette_file;
   std::optional<std::string> export_output_file;
@@ -87,6 +89,16 @@ struct ParsedArguments {
       }
 
       parsed.probe_candidates.emplace_back(argv[++index]);
+      continue;
+    }
+
+    if (argument == "--match-signature") {
+      if (index + 1 >= argc) {
+        romulus::core::log_error("Missing value after --match-signature.");
+        return std::nullopt;
+      }
+
+      parsed.match_signature = argv[++index];
       continue;
     }
 
@@ -183,6 +195,15 @@ struct ParsedArguments {
     return std::nullopt;
   }
 
+  if (parsed.match_signature.has_value() && parsed.probe_file.has_value()) {
+    romulus::core::log_error("--match-signature and --probe-file are mutually exclusive.");
+    return std::nullopt;
+  }
+
+  if (parsed.match_signature.has_value() && !parsed.probe_candidates.empty()) {
+    romulus::core::log_error("--match-signature and --probe-candidate are mutually exclusive.");
+    return std::nullopt;
+  }
   return parsed;
 }
 
@@ -259,6 +280,24 @@ int run_candidate_probe(const std::filesystem::path& data_root, const std::vecto
   }
 
   std::cout << romulus::data::format_candidate_probe_report(result.value.value());
+  return 0;
+}
+
+int run_signature_match(const std::filesystem::path& data_root, const std::string& candidate) {
+  const auto probe = romulus::data::probe_candidate_files(data_root, {candidate});
+  if (!probe.ok()) {
+    romulus::core::log_error(probe.error.value().message);
+    return 1;
+  }
+
+  const auto& bundle = probe.value.value();
+  if (bundle.files.empty()) {
+    romulus::core::log_error("Signature match expected one probed candidate report.");
+    return 1;
+  }
+
+  const auto result = romulus::data::match_candidate_signatures(bundle, bundle.files.front());
+  std::cout << romulus::data::format_signature_registry_report(result);
   return 0;
 }
 
@@ -343,7 +382,7 @@ int main(int argc, char* argv[]) {
   if (!parsed.has_value()) {
     romulus::core::log_error(
         "Usage: caesar2 [--smoke-test] [--data-dir <path>] [--inventory-manifest] [--manifest-out <path>] "
-        "[--probe-file <path>] [--probe-candidate <path>] "
+        "[--probe-file <path>] [--probe-candidate <path>] [--match-signature <path>] "
         "[--export-tile-file <path> --export-palette-file <path> --export-output <path> "
         "[--index-zero-transparent]] [--view-tile-file <path> --view-palette-file <path> "
         "[--index-zero-transparent]]");
@@ -364,6 +403,10 @@ int main(int argc, char* argv[]) {
 
   if (!parsed->probe_candidates.empty()) {
     return run_candidate_probe(data_root, parsed->probe_candidates);
+  }
+
+  if (parsed->match_signature.has_value()) {
+    return run_signature_match(data_root, parsed->match_signature.value());
   }
 
   if (parsed->export_tile_file.has_value()) {
