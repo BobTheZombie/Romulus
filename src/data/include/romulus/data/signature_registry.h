@@ -55,9 +55,25 @@ struct SignatureRegistryResult {
   std::vector<SignatureMatch> matches;
 };
 
+struct BatchClassificationSummary {
+  std::filesystem::path path;
+  CandidateDecoderId top_decoder_id = CandidateDecoderId::None;
+  SignatureConfidence confidence = SignatureConfidence::Low;
+  std::string evidence_summary;
+  std::vector<SignatureMatch> secondary_matches;
+};
+
+struct BatchClassificationReport {
+  std::vector<BatchClassificationSummary> files;
+};
+
 [[nodiscard]] SignatureRegistryResult match_candidate_signatures(const CandidateProbeBundleReport& probe_bundle,
                                                                  const CandidateFileReport& candidate);
 [[nodiscard]] std::string format_signature_registry_report(const SignatureRegistryResult& result);
+
+[[nodiscard]] BatchClassificationReport classify_candidate_batch(const CandidateProbeBundleReport& probe_bundle,
+                                                                bool include_secondary_matches = false);
+[[nodiscard]] std::string format_batch_classification_report(const BatchClassificationReport& report);
 
 [[nodiscard]] std::string to_string(CandidateDecoderId decoder_id);
 [[nodiscard]] std::string to_string(SignatureEvidenceKind kind);

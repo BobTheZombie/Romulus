@@ -27,6 +27,8 @@ struct ParsedArguments {
   std::optional<std::string> probe_file;
   std::vector<std::string> probe_candidates;
   std::optional<std::string> match_signature;
+  std::vector<std::string> classify_candidates;
+  bool classify_include_secondary = false;
   std::optional<std::string> export_tile_file;
   std::optional<std::string> export_palette_file;
   std::optional<std::string> export_output_file;
@@ -99,6 +101,21 @@ struct ParsedArguments {
       }
 
       parsed.match_signature = argv[++index];
+      continue;
+    }
+
+    if (argument == "--classify-candidate") {
+      if (index + 1 >= argc) {
+        romulus::core::log_error("Missing value after --classify-candidate.");
+        return std::nullopt;
+      }
+
+      parsed.classify_candidates.emplace_back(argv[++index]);
+      continue;
+    }
+
+    if (argument == "--classify-include-secondary") {
+      parsed.classify_include_secondary = true;
       continue;
     }
 
@@ -204,6 +221,22 @@ struct ParsedArguments {
     romulus::core::log_error("--match-signature and --probe-candidate are mutually exclusive.");
     return std::nullopt;
   }
+
+  if (parsed.match_signature.has_value() && !parsed.classify_candidates.empty()) {
+    romulus::core::log_error("--match-signature and --classify-candidate are mutually exclusive.");
+    return std::nullopt;
+  }
+
+  if (!parsed.probe_candidates.empty() && !parsed.classify_candidates.empty()) {
+    romulus::core::log_error("--probe-candidate and --classify-candidate are mutually exclusive.");
+    return std::nullopt;
+  }
+
+  if (parsed.classify_include_secondary && parsed.classify_candidates.empty()) {
+    romulus::core::log_error("--classify-include-secondary requires --classify-candidate.");
+    return std::nullopt;
+  }
+
   return parsed;
 }
 
@@ -301,6 +334,20 @@ int run_signature_match(const std::filesystem::path& data_root, const std::strin
   return 0;
 }
 
+int run_batch_classification(const std::filesystem::path& data_root,
+                             const std::vector<std::string>& candidates,
+                             const bool include_secondary_matches) {
+  const auto probe = romulus::data::probe_candidate_files(data_root, candidates);
+  if (!probe.ok()) {
+    romulus::core::log_error(probe.error.value().message);
+    return 1;
+  }
+
+  const auto report = romulus::data::classify_candidate_batch(probe.value.value(), include_secondary_matches);
+  std::cout << romulus::data::format_batch_classification_report(report);
+  return 0;
+}
+
 int run_manifest_generation(const std::filesystem::path& data_root, const std::optional<std::string>& output_path) {
   const auto validation = romulus::data::validate_data_root(data_root);
   if (!validation.ok) {
@@ -383,6 +430,7 @@ int main(int argc, char* argv[]) {
     romulus::core::log_error(
         "Usage: caesar2 [--smoke-test] [--data-dir <path>] [--inventory-manifest] [--manifest-out <path>] "
         "[--probe-file <path>] [--probe-candidate <path>] [--match-signature <path>] "
+        "[--classify-candidate <path> ...] [--classify-include-secondary] "
         "[--export-tile-file <path> --export-palette-file <path> --export-output <path> "
         "[--index-zero-transparent]] [--view-tile-file <path> --view-palette-file <path> "
         "[--index-zero-transparent]]");
@@ -407,6 +455,10 @@ int main(int argc, char* argv[]) {
 
   if (parsed->match_signature.has_value()) {
     return run_signature_match(data_root, parsed->match_signature.value());
+  }
+
+  if (!parsed->classify_candidates.empty()) {
+    return run_batch_classification(data_root, parsed->classify_candidates, parsed->classify_include_secondary);
   }
 
   if (parsed->export_tile_file.has_value()) {
