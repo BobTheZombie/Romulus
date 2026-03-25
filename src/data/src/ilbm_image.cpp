@@ -571,4 +571,46 @@ std::string format_lbm_report(const IlbmImageResource& image, std::size_t max_pa
   return output.str();
 }
 
+ParseResult<RgbaImage> convert_ilbm_to_rgba(const IlbmImageResource& image) {
+  const auto pixel_count = checked_pixel_count(image.width, image.height, image.indexed_pixels.size());
+  if (!pixel_count.ok()) {
+    return {.error = pixel_count.error};
+  }
+
+  if (image.indexed_pixels.size() != pixel_count.value.value()) {
+    return {.error = make_invalid_lbm_error(
+                0,
+                image.indexed_pixels.size(),
+                pixel_count.value.value(),
+                "ILBM indexed pixel buffer size does not match image dimensions")};
+  }
+
+  if (image.palette_entries.empty()) {
+    return {.error = make_invalid_lbm_error(0, 0, 0, "ILBM CMAP palette is empty")};
+  }
+
+  RgbaImage rgba;
+  rgba.width = image.width;
+  rgba.height = image.height;
+  rgba.pixels_rgba.reserve(image.indexed_pixels.size() * 4);
+
+  for (std::size_t index = 0; index < image.indexed_pixels.size(); ++index) {
+    const auto palette_index = static_cast<std::size_t>(image.indexed_pixels[index]);
+    if (palette_index >= image.palette_entries.size()) {
+      std::ostringstream message;
+      message << "Decoded indexed pixel at position " << index << " references missing CMAP entry "
+              << palette_index << " (palette size=" << image.palette_entries.size() << ")";
+      return {.error = make_invalid_lbm_error(0, image.indexed_pixels.size(), image.palette_entries.size(), message.str())};
+    }
+
+    const auto& entry = image.palette_entries[palette_index];
+    rgba.pixels_rgba.push_back(entry.red);
+    rgba.pixels_rgba.push_back(entry.green);
+    rgba.pixels_rgba.push_back(entry.blue);
+    rgba.pixels_rgba.push_back(255);
+  }
+
+  return {.value = std::move(rgba)};
+}
+
 }  // namespace romulus::data

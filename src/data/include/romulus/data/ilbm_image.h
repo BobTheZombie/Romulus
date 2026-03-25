@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "romulus/data/binary_reader.h"
+#include "romulus/data/indexed_image.h"
 #include "romulus/data/palette.h"
 
 namespace romulus::data {
@@ -30,6 +31,8 @@ struct IlbmImageResource {
 
 [[nodiscard]] ParseResult<IlbmImageResource> parse_ilbm_image(std::span<const std::byte> bytes);
 [[nodiscard]] ParseResult<IlbmImageResource> parse_ilbm_image(std::span<const std::uint8_t> bytes);
+
+[[nodiscard]] ParseResult<RgbaImage> convert_ilbm_to_rgba(const IlbmImageResource& image);
 
 [[nodiscard]] std::string format_lbm_report(const IlbmImageResource& image, std::size_t max_palette_entries = 16);
 
