@@ -20,6 +20,7 @@
 #include "romulus/data/palette.h"
 #include "romulus/data/ilbm_image.h"
 #include "romulus/data/pl8_resource.h"
+#include "romulus/data/image256_resource.h"
 #include "romulus/data/pe_exe_resource.h"
 #include "romulus/data/win95_data_container.h"
 #include "romulus/data/win95_data_probe.h"
@@ -52,6 +53,13 @@ struct ParsedArguments {
   std::optional<std::string> probe_exe_resource_payloads_file;
   std::optional<std::string> export_lbm_file;
   std::optional<std::string> view_lbm_file;
+  std::optional<std::string> probe_256_file;
+  std::optional<std::string> view_256_file;
+  std::optional<std::string> view_256_palette_file;
+  std::optional<std::string> export_256_file;
+  std::optional<std::string> export_256_palette_file;
+  std::optional<std::size_t> image_width;
+  std::optional<std::size_t> image_height;
   bool probe_win95_data = false;
   std::optional<std::string> probe_win95_container_file;
   bool probe_win95_container_entries_all = false;
@@ -247,6 +255,68 @@ struct ParsedArguments {
       }
 
       parsed.probe_lbm_file = argv[++index];
+      continue;
+    }
+
+    if (argument == "--probe-256") {
+      if (index + 1 >= argc) {
+        romulus::core::log_error("Missing value after --probe-256.");
+        return std::nullopt;
+      }
+
+      parsed.probe_256_file = argv[++index];
+      continue;
+    }
+
+    if (argument == "--view-256-pl8") {
+      if (index + 2 >= argc) {
+        romulus::core::log_error("--view-256-pl8 requires <image256> <palettepl8>.");
+        return std::nullopt;
+      }
+
+      parsed.view_256_file = argv[++index];
+      parsed.view_256_palette_file = argv[++index];
+      continue;
+    }
+
+    if (argument == "--export-256-pl8") {
+      if (index + 2 >= argc) {
+        romulus::core::log_error("--export-256-pl8 requires <image256> <palettepl8>.");
+        return std::nullopt;
+      }
+
+      parsed.export_256_file = argv[++index];
+      parsed.export_256_palette_file = argv[++index];
+      continue;
+    }
+
+    if (argument == "--width") {
+      if (index + 1 >= argc) {
+        romulus::core::log_error("Missing value after --width.");
+        return std::nullopt;
+      }
+
+      const auto parsed_value = parse_size_t_argument(argv[++index]);
+      if (!parsed_value.has_value()) {
+        romulus::core::log_error("Invalid --width value; expected a non-negative integer.");
+        return std::nullopt;
+      }
+      parsed.image_width = parsed_value.value();
+      continue;
+    }
+
+    if (argument == "--height") {
+      if (index + 1 >= argc) {
+        romulus::core::log_error("Missing value after --height.");
+        return std::nullopt;
+      }
+
+      const auto parsed_value = parse_size_t_argument(argv[++index]);
+      if (!parsed_value.has_value()) {
+        romulus::core::log_error("Invalid --height value; expected a non-negative integer.");
+        return std::nullopt;
+      }
+      parsed.image_height = parsed_value.value();
       continue;
     }
 
@@ -659,6 +729,83 @@ struct ParsedArguments {
     return std::nullopt;
   }
 
+  const bool has_256_probe_arg = parsed.probe_256_file.has_value();
+  const bool has_256_view_arg = parsed.view_256_file.has_value() || parsed.view_256_palette_file.has_value();
+  const bool has_256_export_arg =
+      parsed.export_256_file.has_value() || parsed.export_256_palette_file.has_value() ||
+      (parsed.export_output_file.has_value() && parsed.export_256_file.has_value());
+  if (has_256_view_arg) {
+    if (!parsed.view_256_file.has_value() || !parsed.view_256_palette_file.has_value()) {
+      romulus::core::log_error("--view-256-pl8 requires <image256> <palettepl8>.");
+      return std::nullopt;
+    }
+  }
+  if (has_256_export_arg) {
+    if (!parsed.export_256_file.has_value() || !parsed.export_256_palette_file.has_value() ||
+        !parsed.export_output_file.has_value()) {
+      romulus::core::log_error("--export-256-pl8 requires <image256> <palettepl8> --export-output <path>.");
+      return std::nullopt;
+    }
+  }
+
+  const bool has_any_256_mode = has_256_probe_arg || has_256_view_arg || has_256_export_arg;
+  if (has_any_256_mode && (has_any_tile_export_arg || has_any_view_arg || has_lbm_export_arg || has_lbm_view_arg)) {
+    romulus::core::log_error(".256+.PL8 commands are mutually exclusive with existing tile/LBM export/view commands.");
+    return std::nullopt;
+  }
+
+  if (has_any_256_mode) {
+    const bool has_other_mode = parsed.inventory_manifest || parsed.probe_file.has_value() ||
+                                !parsed.probe_candidates.empty() || parsed.match_signature.has_value() ||
+                                !parsed.classify_candidates.empty() || parsed.probe_lbm_file.has_value() ||
+                                !parsed.probe_pl8_files.empty() || parsed.probe_exe_file.has_value() ||
+                                parsed.probe_exe_resources_file.has_value() ||
+                                parsed.probe_exe_resource_payloads_file.has_value() || parsed.probe_win95_data ||
+                                parsed.probe_win95_container_file.has_value() ||
+                                parsed.probe_pack_ilbm_container_file.has_value() ||
+                                parsed.probe_pack_text_container_file.has_value() ||
+                                parsed.probe_pack_pl8_container_file.has_value() ||
+                                parsed.probe_pack_text_batch_container_file.has_value() ||
+                                parsed.probe_pack_ilbm_batch_container_file.has_value() ||
+                                parsed.index_pack_text_container_file.has_value() ||
+                                parsed.index_pack_ilbm_container_file.has_value() ||
+                                parsed.index_pack_known_container_file.has_value() ||
+                                parsed.export_pack_text_success_container_file.has_value() ||
+                                parsed.export_pack_text_first_container_file.has_value() ||
+                                parsed.export_pack_ilbm_success_container_file.has_value() ||
+                                parsed.export_pack_ilbm_first_container_file.has_value() ||
+                                parsed.extract_pack_ilbm_container_file.has_value() ||
+                                parsed.view_pack_ilbm_container_file.has_value() ||
+                                parsed.export_pack_text_container_file.has_value() ||
+                                parsed.export_pack_pl8_container_file.has_value();
+    if (has_other_mode) {
+      romulus::core::log_error(".256+.PL8 commands are mutually exclusive with unrelated command modes.");
+      return std::nullopt;
+    }
+  }
+
+  if ((parsed.image_width.has_value() || parsed.image_height.has_value()) && !has_any_256_mode) {
+    romulus::core::log_error("--width/--height are only supported with --probe-256, --view-256-pl8, or --export-256-pl8.");
+    return std::nullopt;
+  }
+
+  if (has_any_256_mode) {
+    if (parsed.image_width.has_value() != parsed.image_height.has_value()) {
+      romulus::core::log_error("--width and --height must be provided together.");
+      return std::nullopt;
+    }
+
+    if (parsed.image_width.has_value() && (parsed.image_width.value() == 0 || parsed.image_width.value() > 1024)) {
+      romulus::core::log_error("--width must be between 1 and 1024.");
+      return std::nullopt;
+    }
+
+    if (parsed.image_height.has_value() && (parsed.image_height.value() == 0 || parsed.image_height.value() > 1024)) {
+      romulus::core::log_error("--height must be between 1 and 1024.");
+      return std::nullopt;
+    }
+  }
+
   if (parsed.probe_file.has_value() && !parsed.probe_candidates.empty()) {
     romulus::core::log_error("--probe-file and --probe-candidate are mutually exclusive.");
     return std::nullopt;
@@ -932,7 +1079,7 @@ struct ParsedArguments {
   if (!has_pack_ilbm_extract && !has_pack_ilbm_success_export && !has_pack_text_success_export && !has_pack_text_export &&
       !has_pack_pl8_export &&
       parsed.export_output_file.has_value() &&
-      !has_any_tile_export_arg && !has_lbm_export_arg) {
+      !has_any_tile_export_arg && !has_lbm_export_arg && !has_256_export_arg) {
     romulus::core::log_error("--export-output requires an export mode.");
     return std::nullopt;
   }
@@ -958,6 +1105,70 @@ struct ParsedArguments {
   }
 
   return candidate;
+}
+
+[[nodiscard]] std::optional<std::pair<std::uint16_t, std::uint16_t>> resolve_256_dimensions(
+    const std::string& image_path_arg,
+    const std::optional<std::size_t>& width_arg,
+    const std::optional<std::size_t>& height_arg) {
+  if (width_arg.has_value() && height_arg.has_value()) {
+    return std::pair<std::uint16_t, std::uint16_t>{static_cast<std::uint16_t>(width_arg.value()),
+                                                    static_cast<std::uint16_t>(height_arg.value())};
+  }
+
+  return romulus::data::resolve_known_win95_256_dimensions(std::filesystem::path(image_path_arg));
+}
+
+[[nodiscard]] std::optional<romulus::data::Image256Pl8DecodeResult> decode_256_pl8_to_rgba(
+    const std::filesystem::path& data_root,
+    const std::string& image256_file_arg,
+    const std::string& palette_file_arg,
+    const std::optional<std::size_t>& width_arg,
+    const std::optional<std::size_t>& height_arg,
+    const bool index_zero_transparent) {
+  const auto image_path = resolve_data_relative(data_root, image256_file_arg);
+  const auto palette_path = resolve_data_relative(data_root, palette_file_arg);
+  const auto dimensions = resolve_256_dimensions(image256_file_arg, width_arg, height_arg);
+  if (!dimensions.has_value()) {
+    romulus::core::log_error("No dimensions provided and no known bounded dimensions for .256 target: " + image256_file_arg);
+    return std::nullopt;
+  }
+
+  const auto loaded_image = romulus::data::load_file_to_memory(image_path);
+  if (!loaded_image.ok()) {
+    romulus::core::log_error(loaded_image.error->message);
+    return std::nullopt;
+  }
+
+  const auto loaded_palette = romulus::data::load_file_to_memory(palette_path);
+  if (!loaded_palette.ok()) {
+    romulus::core::log_error(loaded_palette.error->message);
+    return std::nullopt;
+  }
+
+  const auto decoded = romulus::data::decode_caesar2_win95_256_pl8_pair(loaded_image.value->bytes,
+                                                                         loaded_palette.value->bytes,
+                                                                         dimensions->first,
+                                                                         dimensions->second,
+                                                                         index_zero_transparent);
+
+  romulus::data::Image256Pl8Report report{
+      .image256_path = image_path,
+      .palette_pl8_path = palette_path,
+      .width = dimensions->first,
+      .height = dimensions->second,
+      .payload_size = loaded_image.value->bytes.size(),
+      .palette_entries = decoded.ok() ? decoded.value->palette_pl8.palette_entries.size() : 0,
+      .success = decoded.ok(),
+      .status = decoded.ok() ? "decode_succeeded" : decoded.error->message,
+  };
+  std::cout << romulus::data::format_image256_pl8_report(report);
+
+  if (!decoded.ok()) {
+    return std::nullopt;
+  }
+
+  return decoded.value.value();
 }
 
 [[nodiscard]] std::optional<romulus::data::RgbaImage> decode_tile_image_to_rgba(const std::filesystem::path& data_root,
@@ -1147,6 +1358,96 @@ int run_lbm_probe(const std::filesystem::path& data_root, const std::string& lbm
   }
 
   std::cout << romulus::data::format_lbm_report(parsed.value.value());
+  return 0;
+}
+
+int run_256_probe(const std::filesystem::path& data_root,
+                  const std::string& image256_file_arg,
+                  const std::optional<std::size_t>& width_arg,
+                  const std::optional<std::size_t>& height_arg) {
+  const auto image_path = resolve_data_relative(data_root, image256_file_arg);
+  const auto dimensions = resolve_256_dimensions(image256_file_arg, width_arg, height_arg);
+  if (!dimensions.has_value()) {
+    romulus::core::log_error("No dimensions provided and no known bounded dimensions for .256 target: " + image256_file_arg);
+    return 1;
+  }
+
+  const auto loaded = romulus::data::load_file_to_memory(image_path);
+  if (!loaded.ok()) {
+    romulus::core::log_error(loaded.error.value().message);
+    return 1;
+  }
+
+  const auto parsed = romulus::data::parse_caesar2_win95_raw_256(loaded.value->bytes, dimensions->first, dimensions->second);
+  if (!parsed.ok()) {
+    romulus::data::Image256Pl8Report report{
+        .image256_path = image_path,
+        .palette_pl8_path = "",
+        .width = dimensions->first,
+        .height = dimensions->second,
+        .payload_size = loaded.value->bytes.size(),
+        .palette_entries = 0,
+        .success = false,
+        .status = parsed.error->message,
+    };
+    std::cout << romulus::data::format_image256_pl8_report(report);
+    return 1;
+  }
+
+  std::cout << romulus::data::format_image256_report(parsed.value.value());
+  return 0;
+}
+
+int run_256_pl8_viewer(const std::filesystem::path& data_root,
+                       const std::string& image256_file_arg,
+                       const std::string& palette_file_arg,
+                       const std::optional<std::size_t>& width_arg,
+                       const std::optional<std::size_t>& height_arg,
+                       const bool smoke_test,
+                       const bool index_zero_transparent) {
+  const auto decoded = decode_256_pl8_to_rgba(data_root,
+                                              image256_file_arg,
+                                              palette_file_arg,
+                                              width_arg,
+                                              height_arg,
+                                              index_zero_transparent);
+  if (!decoded.has_value()) {
+    return 1;
+  }
+
+  romulus::platform::Application app({
+      .smoke_test = smoke_test,
+      .data_root = data_root,
+      .debug_view_image = decoded->rgba_image,
+  });
+  return app.run();
+}
+
+int run_256_pl8_export(const std::filesystem::path& data_root,
+                       const std::string& image256_file_arg,
+                       const std::string& palette_file_arg,
+                       const std::optional<std::size_t>& width_arg,
+                       const std::optional<std::size_t>& height_arg,
+                       const std::string& output_file_arg,
+                       const bool index_zero_transparent) {
+  const auto decoded = decode_256_pl8_to_rgba(data_root,
+                                              image256_file_arg,
+                                              palette_file_arg,
+                                              width_arg,
+                                              height_arg,
+                                              index_zero_transparent);
+  if (!decoded.has_value()) {
+    return 1;
+  }
+
+  const auto output_path = resolve_data_relative(data_root, output_file_arg);
+  const auto exported = romulus::data::export_rgba_image_as_ppm(decoded->rgba_image, output_path);
+  if (!exported.ok()) {
+    romulus::core::log_error(exported.error->message);
+    return 1;
+  }
+
+  romulus::core::log_info("Exported decoded .256+.PL8 image to: " + output_path.string());
   return 0;
 }
 
@@ -1923,6 +2224,9 @@ int main(int argc, char* argv[]) {
         "Usage: caesar2 [--smoke-test] [--data-dir <path>] [--inventory-manifest] [--manifest-out <path>] "
         "[--probe-file <path>] [--probe-candidate <path>] [--match-signature <path>] "
         "[--probe-lbm <path>] [--probe-pl8 <path> ...] "
+        "[--probe-256 <path> [--width <w> --height <h>]] "
+        "[--view-256-pl8 <image256> <palettepl8> [--width <w> --height <h>]] "
+        "[--export-256-pl8 <image256> <palettepl8> --export-output <path> [--width <w> --height <h>]] "
         "[--probe-exe <path>] "
         "[--probe-exe-resources <path>] "
         "[--probe-exe-resource-payloads <path>] "
@@ -1974,6 +2278,8 @@ int main(int argc, char* argv[]) {
 
   const bool has_data_required_command = parsed->inventory_manifest || parsed->probe_file.has_value() ||
                                          parsed->probe_lbm_file.has_value() || !parsed->probe_pl8_files.empty() ||
+                                         parsed->probe_256_file.has_value() || parsed->view_256_file.has_value() ||
+                                         parsed->export_256_file.has_value() ||
                                          parsed->probe_exe_file.has_value() || parsed->probe_exe_resources_file.has_value() ||
                                          parsed->probe_exe_resource_payloads_file.has_value() ||
                                          parsed->probe_win95_data || parsed->probe_win95_container_file.has_value() ||
@@ -2013,6 +2319,30 @@ int main(int argc, char* argv[]) {
 
   if (parsed->probe_lbm_file.has_value()) {
     return run_lbm_probe(data_root, parsed->probe_lbm_file.value());
+  }
+
+  if (parsed->probe_256_file.has_value()) {
+    return run_256_probe(data_root, parsed->probe_256_file.value(), parsed->image_width, parsed->image_height);
+  }
+
+  if (parsed->view_256_file.has_value()) {
+    return run_256_pl8_viewer(data_root,
+                              parsed->view_256_file.value(),
+                              parsed->view_256_palette_file.value(),
+                              parsed->image_width,
+                              parsed->image_height,
+                              parsed->smoke_test,
+                              parsed->index_zero_transparent);
+  }
+
+  if (parsed->export_256_file.has_value()) {
+    return run_256_pl8_export(data_root,
+                              parsed->export_256_file.value(),
+                              parsed->export_256_palette_file.value(),
+                              parsed->image_width,
+                              parsed->image_height,
+                              parsed->export_output_file.value(),
+                              parsed->index_zero_transparent);
   }
 
   if (!parsed->probe_pl8_files.empty()) {
