@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <charconv>
 #include <filesystem>
 #include <fstream>
@@ -1034,8 +1035,9 @@ struct ParsedArguments {
     }
   }
   if (parsed.pl8_sprite_index.has_value() &&
-      !(has_pl8_sprite_probe_arg)) {
-    romulus::core::log_error("--sprite-index is only supported with --probe-pl8-sprites.");
+      !(has_pl8_sprite_probe_arg || has_pl8_sprite_view_arg || has_pl8_sprite_export_arg)) {
+    romulus::core::log_error(
+        "--sprite-index is only supported with --probe-pl8-sprites, --view-pl8-sprite-pair, or --export-pl8-sprite-pair.");
     return std::nullopt;
   }
 
@@ -1594,6 +1596,37 @@ struct ParsedArguments {
   }
 
   return decoded.value.value();
+}
+
+[[nodiscard]] std::optional<romulus::data::RgbaImage> select_pl8_sprite_output_image(
+    const romulus::data::Pl8SpritePairMultiDecodeResult& decoded,
+    const std::optional<std::size_t>& sprite_index) {
+  if (!sprite_index.has_value()) {
+    if (!decoded.composition.has_value()) {
+      romulus::core::log_error("PL8 sprite-table+.256 decode produced no composited canvas.");
+      return std::nullopt;
+    }
+    romulus::core::log_info("PL8 sprite output mode: composed (all decoded sprites)");
+    return decoded.composition->rgba_image;
+  }
+
+  const auto target_index = sprite_index.value();
+  const auto found = std::find_if(decoded.decoded_sprites.begin(), decoded.decoded_sprites.end(), [target_index](const auto& sprite) {
+    return sprite.sprite_index == target_index;
+  });
+  if (found == decoded.decoded_sprites.end()) {
+    if (target_index >= decoded.image_pl8.sprites.size()) {
+      romulus::core::log_error("PL8 sprite index out of range for sprite table: " + std::to_string(target_index));
+      return std::nullopt;
+    }
+
+    romulus::core::log_error("PL8 sprite index decode unsupported or failed for sprite: " + std::to_string(target_index));
+    return std::nullopt;
+  }
+
+  romulus::core::log_info("PL8 sprite output mode: single sprite index=" + std::to_string(target_index) + " dimensions=" +
+                          std::to_string(found->rgba_image.width) + "x" + std::to_string(found->rgba_image.height));
+  return found->rgba_image;
 }
 
 [[nodiscard]] std::optional<romulus::data::RgbaImage> decode_tile_image_to_rgba(const std::filesystem::path& data_root,
@@ -2174,6 +2207,7 @@ int run_pl8_structured_pair_export(const std::filesystem::path& data_root,
 int run_pl8_sprite_pair_viewer(const std::filesystem::path& data_root,
                                const std::string& image_pl8_file_arg,
                                const std::string& palette_256_file_arg,
+                               const std::optional<std::size_t>& sprite_index,
                                const bool smoke_test,
                                const bool index_zero_transparent) {
   const auto decoded = decode_pl8_sprite_256_to_rgba(data_root,
@@ -2183,11 +2217,15 @@ int run_pl8_sprite_pair_viewer(const std::filesystem::path& data_root,
   if (!decoded.has_value()) {
     return 1;
   }
+  const auto output_image = select_pl8_sprite_output_image(decoded.value(), sprite_index);
+  if (!output_image.has_value()) {
+    return 1;
+  }
 
   romulus::platform::Application app({
       .smoke_test = smoke_test,
       .data_root = data_root,
-      .debug_view_image = decoded->composition->rgba_image,
+      .debug_view_image = output_image.value(),
   });
   return app.run();
 }
@@ -2196,6 +2234,7 @@ int run_pl8_sprite_pair_export(const std::filesystem::path& data_root,
                                const std::string& image_pl8_file_arg,
                                const std::string& palette_256_file_arg,
                                const std::filesystem::path& output_path,
+                               const std::optional<std::size_t>& sprite_index,
                                const bool index_zero_transparent) {
   const auto decoded = decode_pl8_sprite_256_to_rgba(data_root,
                                                       image_pl8_file_arg,
@@ -2204,8 +2243,11 @@ int run_pl8_sprite_pair_export(const std::filesystem::path& data_root,
   if (!decoded.has_value()) {
     return 1;
   }
-
-  const auto exported = romulus::data::export_rgba_image_as_ppm(decoded->composition->rgba_image, output_path);
+  const auto output_image = select_pl8_sprite_output_image(decoded.value(), sprite_index);
+  if (!output_image.has_value()) {
+    return 1;
+  }
+  const auto exported = romulus::data::export_rgba_image_as_ppm(output_image.value(), output_path);
   if (!exported.ok()) {
     romulus::core::log_error(exported.error->message);
     return 1;
@@ -2988,8 +3030,8 @@ int main(int argc, char* argv[]) {
         "[--export-256-pl8 <image256> <palettepl8> --export-output <path> [--width <w> --height <h>]] "
         "[--view-pl8-image-pair <imagepl8> <palette256>] "
         "[--export-pl8-image-pair <imagepl8> <palette256> --export-output <path>] "
-        "[--view-pl8-sprite-pair <imagepl8> <palette256>] "
-        "[--export-pl8-sprite-pair <imagepl8> <palette256> --export-output <path>] "
+        "[--view-pl8-sprite-pair <imagepl8> <palette256> [--sprite-index <n>]] "
+        "[--export-pl8-sprite-pair <imagepl8> <palette256> --export-output <path> [--sprite-index <n>]] "
         "[--view-pl8-structured-pair <imagepl8> <palette256>] "
         "[--export-pl8-structured-pair <imagepl8> <palette256> --export-output <path>] "
         "[--probe-exe <path>] "
@@ -3182,6 +3224,7 @@ int main(int argc, char* argv[]) {
     return run_pl8_sprite_pair_viewer(data_root,
                                       parsed->view_pl8_sprite_file.value(),
                                       parsed->view_pl8_sprite_palette_file.value(),
+                                      parsed->pl8_sprite_index,
                                       parsed->smoke_test,
                                       parsed->index_zero_transparent);
   }
@@ -3191,6 +3234,7 @@ int main(int argc, char* argv[]) {
                                       parsed->export_pl8_sprite_file.value(),
                                       parsed->export_pl8_sprite_palette_file.value(),
                                       parsed->export_output_file.value(),
+                                      parsed->pl8_sprite_index,
                                       parsed->index_zero_transparent);
   }
 
