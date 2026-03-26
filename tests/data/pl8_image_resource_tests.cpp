@@ -105,6 +105,36 @@ std::vector<std::uint8_t> make_structured_pl8_fixture(const std::uint16_t width 
   return bytes;
 }
 
+std::vector<std::uint8_t> make_structured_regions_probe_fixture() {
+  const std::uint16_t width = 96;
+  const std::uint16_t height = 337;
+  constexpr std::size_t payload_size = 37568;
+  std::vector<std::uint8_t> bytes(romulus::data::Pl8ImageResource::kHeaderSize + payload_size, 0);
+  bytes[8] = static_cast<std::uint8_t>(width & 0xFFU);
+  bytes[9] = static_cast<std::uint8_t>((width >> 8U) & 0xFFU);
+  bytes[10] = static_cast<std::uint8_t>(height & 0xFFU);
+  bytes[11] = static_cast<std::uint8_t>((height >> 8U) & 0xFFU);
+
+  const std::uint32_t leading_u32[8] = {
+      16U,
+      32352U,
+      33344U,
+      1024U,
+      34368U,
+      1024U,
+      35392U,
+      2176U,
+  };
+  for (std::size_t field = 0; field < 8; ++field) {
+    const auto offset = romulus::data::Pl8ImageResource::kHeaderSize + (field * 4);
+    bytes[offset + 0] = static_cast<std::uint8_t>(leading_u32[field] & 0xFFU);
+    bytes[offset + 1] = static_cast<std::uint8_t>((leading_u32[field] >> 8U) & 0xFFU);
+    bytes[offset + 2] = static_cast<std::uint8_t>((leading_u32[field] >> 16U) & 0xFFU);
+    bytes[offset + 3] = static_cast<std::uint8_t>((leading_u32[field] >> 24U) & 0xFFU);
+  }
+  return bytes;
+}
+
 int test_parse_forum_style_pl8_image_success() {
   const auto bytes = make_forum_style_pl8_image_fixture();
   const auto parsed = romulus::data::parse_caesar2_forum_pl8_image(bytes);
@@ -366,6 +396,76 @@ int test_decode_structured_pl8_with_256_palette_success() {
                      "structured decode should respect index-zero transparency");
 }
 
+int test_probe_structured_pl8_regions_is_deterministic() {
+  const auto bytes = make_structured_regions_probe_fixture();
+  const auto probed = romulus::data::probe_caesar2_rat_back_structured_pl8_regions(bytes);
+  if (assert_true(probed.ok(), "structured regions probe fixture should parse") != 0) {
+    return 1;
+  }
+
+  if (assert_true(probed.value->payload_surplus_or_deficit == 5216, "surplus should remain deterministic") != 0) {
+    return 1;
+  }
+
+  if (assert_true(!probed.value->record_hints.empty(), "record hints should be present") != 0) {
+    return 1;
+  }
+
+  if (assert_true(!probed.value->region_hints.empty(), "region hints should be present") != 0) {
+    return 1;
+  }
+
+  const auto report = romulus::data::format_pl8_structured_regions_probe_report(probed.value.value());
+  if (assert_true(report.find("# Caesar II Win95 RAT_BACK-style Structured PL8 Regions Reconnaissance") !=
+                      std::string::npos,
+                  "regions report should include stable title") != 0) {
+    return 1;
+  }
+
+  if (assert_true(report.find("decode_status: not_attempted") != std::string::npos,
+                  "regions report should not claim decode") != 0) {
+    return 1;
+  }
+
+  return assert_true(report.find("source: leading_u32_pairs") != std::string::npos,
+                     "regions report should include candidate source label");
+}
+
+int test_probe_structured_pl8_regions_rejects_truncated_payload() {
+  std::vector<std::uint8_t> bytes(romulus::data::Pl8ImageResource::kHeaderSize + 4, 0);
+  bytes[8] = 96;
+  bytes[10] = 1;
+  const auto probed = romulus::data::probe_caesar2_rat_back_structured_pl8_regions(bytes);
+  if (assert_true(!probed.ok(), "regions probe should reject too-small payload") != 0) {
+    return 1;
+  }
+
+  return assert_true(probed.error->message.find("requires at least 8 bytes") != std::string::npos,
+                     "regions probe truncation failure should be explicit");
+}
+
+int test_format_structured_pl8_regions_comparison_report_is_stable() {
+  const auto lhs = make_structured_regions_probe_fixture();
+  auto rhs = make_structured_regions_probe_fixture();
+  rhs.push_back(0U);
+  const auto lhs_probe = romulus::data::probe_caesar2_rat_back_structured_pl8_regions(lhs);
+  const auto rhs_probe = romulus::data::probe_caesar2_rat_back_structured_pl8_regions(rhs);
+  if (assert_true(lhs_probe.ok() && rhs_probe.ok(), "comparison fixtures should probe") != 0) {
+    return 1;
+  }
+
+  const auto report = romulus::data::format_pl8_structured_regions_comparison_report(
+      lhs_probe.value.value(), "lhs", rhs_probe.value.value(), "rhs");
+  if (assert_true(report.find("# Caesar II Win95 RAT_BACK-style Structured PL8 Regions Comparison") !=
+                      std::string::npos,
+                  "comparison report should include stable title") != 0) {
+    return 1;
+  }
+
+  return assert_true(report.find("payload_size_delta_rhs_minus_lhs: 1") != std::string::npos,
+                     "comparison report should include deterministic payload delta");
+}
+
 }  // namespace
 
 int main() {
@@ -426,6 +526,18 @@ int main() {
   }
 
   if (test_decode_structured_pl8_with_256_palette_success() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_probe_structured_pl8_regions_is_deterministic() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_probe_structured_pl8_regions_rejects_truncated_payload() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_format_structured_pl8_regions_comparison_report_is_stable() != 0) {
     return EXIT_FAILURE;
   }
 

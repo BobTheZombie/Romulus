@@ -62,8 +62,11 @@ struct ParsedArguments {
   std::optional<std::string> probe_pl8_image_file;
   std::optional<std::string> probe_pl8_image_variant_file;
   std::optional<std::string> probe_pl8_structured_file;
+  std::optional<std::string> probe_pl8_structured_regions_file;
   std::optional<std::string> compare_pl8_image_variant_lhs_file;
   std::optional<std::string> compare_pl8_image_variant_rhs_file;
+  std::optional<std::string> compare_pl8_structured_regions_lhs_file;
+  std::optional<std::string> compare_pl8_structured_regions_rhs_file;
   std::optional<std::string> view_pl8_image_file;
   std::optional<std::string> view_pl8_image_palette_file;
   std::optional<std::string> export_pl8_image_file;
@@ -334,6 +337,16 @@ struct ParsedArguments {
       continue;
     }
 
+    if (argument == "--probe-pl8-structured-regions") {
+      if (index + 1 >= argc) {
+        romulus::core::log_error("Missing value after --probe-pl8-structured-regions.");
+        return std::nullopt;
+      }
+
+      parsed.probe_pl8_structured_regions_file = argv[++index];
+      continue;
+    }
+
     if (argument == "--compare-pl8-image-variants") {
       if (index + 2 >= argc) {
         romulus::core::log_error("--compare-pl8-image-variants requires <lhs_imagepl8> <rhs_imagepl8>.");
@@ -342,6 +355,17 @@ struct ParsedArguments {
 
       parsed.compare_pl8_image_variant_lhs_file = argv[++index];
       parsed.compare_pl8_image_variant_rhs_file = argv[++index];
+      continue;
+    }
+
+    if (argument == "--compare-pl8-structured-regions") {
+      if (index + 2 >= argc) {
+        romulus::core::log_error("--compare-pl8-structured-regions requires <lhs_imagepl8> <rhs_imagepl8>.");
+        return std::nullopt;
+      }
+
+      parsed.compare_pl8_structured_regions_lhs_file = argv[++index];
+      parsed.compare_pl8_structured_regions_rhs_file = argv[++index];
       continue;
     }
 
@@ -850,8 +874,11 @@ struct ParsedArguments {
   const bool has_pl8_image_probe_arg = parsed.probe_pl8_image_file.has_value();
   const bool has_pl8_variant_probe_arg = parsed.probe_pl8_image_variant_file.has_value();
   const bool has_pl8_structured_probe_arg = parsed.probe_pl8_structured_file.has_value();
+  const bool has_pl8_structured_regions_probe_arg = parsed.probe_pl8_structured_regions_file.has_value();
   const bool has_pl8_variant_compare_arg =
       parsed.compare_pl8_image_variant_lhs_file.has_value() || parsed.compare_pl8_image_variant_rhs_file.has_value();
+  const bool has_pl8_structured_regions_compare_arg = parsed.compare_pl8_structured_regions_lhs_file.has_value() ||
+                                                      parsed.compare_pl8_structured_regions_rhs_file.has_value();
   const bool has_pl8_image_view_arg =
       parsed.view_pl8_image_file.has_value() || parsed.view_pl8_image_palette_file.has_value();
   const bool has_pl8_image_export_arg =
@@ -863,7 +890,8 @@ struct ParsedArguments {
       parsed.export_pl8_structured_file.has_value() || parsed.export_pl8_structured_palette_file.has_value() ||
       (parsed.export_output_file.has_value() && parsed.export_pl8_structured_file.has_value());
   const bool has_any_pl8_image_mode =
-      has_pl8_image_probe_arg || has_pl8_variant_probe_arg || has_pl8_structured_probe_arg || has_pl8_variant_compare_arg ||
+      has_pl8_image_probe_arg || has_pl8_variant_probe_arg || has_pl8_structured_probe_arg ||
+      has_pl8_structured_regions_probe_arg || has_pl8_variant_compare_arg || has_pl8_structured_regions_compare_arg ||
       has_pl8_image_view_arg || has_pl8_image_export_arg || has_pl8_structured_view_arg || has_pl8_structured_export_arg;
   if (has_pl8_image_view_arg) {
     if (!parsed.view_pl8_image_file.has_value() || !parsed.view_pl8_image_palette_file.has_value()) {
@@ -882,6 +910,13 @@ struct ParsedArguments {
   if (has_pl8_variant_compare_arg) {
     if (!parsed.compare_pl8_image_variant_lhs_file.has_value() || !parsed.compare_pl8_image_variant_rhs_file.has_value()) {
       romulus::core::log_error("--compare-pl8-image-variants requires <lhs_imagepl8> <rhs_imagepl8>.");
+      return std::nullopt;
+    }
+  }
+  if (has_pl8_structured_regions_compare_arg) {
+    if (!parsed.compare_pl8_structured_regions_lhs_file.has_value() ||
+        !parsed.compare_pl8_structured_regions_rhs_file.has_value()) {
+      romulus::core::log_error("--compare-pl8-structured-regions requires <lhs_imagepl8> <rhs_imagepl8>.");
       return std::nullopt;
     }
   }
@@ -1766,6 +1801,25 @@ int run_pl8_structured_probe(const std::filesystem::path& data_root, const std::
   return 0;
 }
 
+int run_pl8_structured_regions_probe(const std::filesystem::path& data_root, const std::string& image_pl8_file_arg) {
+  const auto image_path = resolve_data_relative(data_root, image_pl8_file_arg);
+  const auto loaded = romulus::data::load_file_to_memory(image_path);
+  if (!loaded.ok()) {
+    romulus::core::log_error(loaded.error->message);
+    return 1;
+  }
+
+  const auto probed = romulus::data::probe_caesar2_rat_back_structured_pl8_regions(loaded.value->bytes);
+  if (!probed.ok()) {
+    romulus::core::log_error(probed.error->message);
+    return 1;
+  }
+
+  std::cout << "source_path: " << image_path.string() << "\n";
+  std::cout << romulus::data::format_pl8_structured_regions_probe_report(probed.value.value());
+  return 0;
+}
+
 int run_pl8_image_variant_compare(const std::filesystem::path& data_root,
                                   const std::string& lhs_pl8_file_arg,
                                   const std::string& rhs_pl8_file_arg) {
@@ -1796,6 +1850,40 @@ int run_pl8_image_variant_compare(const std::filesystem::path& data_root,
   }
 
   std::cout << romulus::data::format_pl8_image_variant_comparison_report(
+      lhs_probed.value.value(), lhs_path.string(), rhs_probed.value.value(), rhs_path.string());
+  return 0;
+}
+
+int run_pl8_structured_regions_compare(const std::filesystem::path& data_root,
+                                       const std::string& lhs_pl8_file_arg,
+                                       const std::string& rhs_pl8_file_arg) {
+  const auto lhs_path = resolve_data_relative(data_root, lhs_pl8_file_arg);
+  const auto rhs_path = resolve_data_relative(data_root, rhs_pl8_file_arg);
+
+  const auto lhs_loaded = romulus::data::load_file_to_memory(lhs_path);
+  if (!lhs_loaded.ok()) {
+    romulus::core::log_error(lhs_loaded.error->message);
+    return 1;
+  }
+
+  const auto rhs_loaded = romulus::data::load_file_to_memory(rhs_path);
+  if (!rhs_loaded.ok()) {
+    romulus::core::log_error(rhs_loaded.error->message);
+    return 1;
+  }
+
+  const auto lhs_probed = romulus::data::probe_caesar2_rat_back_structured_pl8_regions(lhs_loaded.value->bytes);
+  if (!lhs_probed.ok()) {
+    romulus::core::log_error(lhs_probed.error->message);
+    return 1;
+  }
+  const auto rhs_probed = romulus::data::probe_caesar2_rat_back_structured_pl8_regions(rhs_loaded.value->bytes);
+  if (!rhs_probed.ok()) {
+    romulus::core::log_error(rhs_probed.error->message);
+    return 1;
+  }
+
+  std::cout << romulus::data::format_pl8_structured_regions_comparison_report(
       lhs_probed.value.value(), lhs_path.string(), rhs_probed.value.value(), rhs_path.string());
   return 0;
 }
@@ -2653,7 +2741,9 @@ int main(int argc, char* argv[]) {
         "[--probe-file <path>] [--probe-candidate <path>] [--match-signature <path>] "
         "[--probe-lbm <path>] [--probe-pl8 <path> ...] [--probe-pl8-image <path>] "
         "[--probe-pl8-image-variant <path>] [--probe-pl8-structured <path>] "
+        "[--probe-pl8-structured-regions <path>] "
         "[--compare-pl8-image-variants <lhs_imagepl8> <rhs_imagepl8>] "
+        "[--compare-pl8-structured-regions <lhs_imagepl8> <rhs_imagepl8>] "
         "[--probe-256 <path> [--width <w> --height <h>]] "
         "[--view-256-pl8 <image256> <palettepl8> [--width <w> --height <h>]] "
         "[--export-256-pl8 <image256> <palettepl8> --export-output <path> [--width <w> --height <h>]] "
@@ -2715,8 +2805,11 @@ int main(int argc, char* argv[]) {
                                          parsed->probe_pl8_image_file.has_value() ||
                                          parsed->probe_pl8_image_variant_file.has_value() ||
                                          parsed->probe_pl8_structured_file.has_value() ||
+                                         parsed->probe_pl8_structured_regions_file.has_value() ||
                                          parsed->compare_pl8_image_variant_lhs_file.has_value() ||
                                          parsed->compare_pl8_image_variant_rhs_file.has_value() ||
+                                         parsed->compare_pl8_structured_regions_lhs_file.has_value() ||
+                                         parsed->compare_pl8_structured_regions_rhs_file.has_value() ||
                                          parsed->probe_256_file.has_value() || parsed->view_256_file.has_value() ||
                                          parsed->export_256_file.has_value() ||
                                          parsed->view_pl8_image_file.has_value() ||
@@ -2780,10 +2873,20 @@ int main(int argc, char* argv[]) {
     return run_pl8_structured_probe(data_root, parsed->probe_pl8_structured_file.value());
   }
 
+  if (parsed->probe_pl8_structured_regions_file.has_value()) {
+    return run_pl8_structured_regions_probe(data_root, parsed->probe_pl8_structured_regions_file.value());
+  }
+
   if (parsed->compare_pl8_image_variant_lhs_file.has_value()) {
     return run_pl8_image_variant_compare(data_root,
                                          parsed->compare_pl8_image_variant_lhs_file.value(),
                                          parsed->compare_pl8_image_variant_rhs_file.value());
+  }
+
+  if (parsed->compare_pl8_structured_regions_lhs_file.has_value()) {
+    return run_pl8_structured_regions_compare(data_root,
+                                              parsed->compare_pl8_structured_regions_lhs_file.value(),
+                                              parsed->compare_pl8_structured_regions_rhs_file.value());
   }
 
   if (parsed->view_256_file.has_value()) {
