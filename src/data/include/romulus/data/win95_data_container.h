@@ -67,6 +67,14 @@ struct Win95PackIlbmExtraction {
   IlbmImageResource ilbm;
 };
 
+struct Win95PackTextExtraction {
+  Win95PackContainerEntry entry;
+  std::vector<std::uint8_t> payload_bytes;
+  std::string decoded_text;
+  std::size_t line_count = 0;
+  std::size_t character_count = 0;
+};
+
 struct Win95PackIlbmBatchEntryResult {
   std::size_t entry_index = 0;
   std::size_t offset = 0;
@@ -127,6 +135,10 @@ struct Win95PackIlbmIndexReportOptions {
   bool include_all_entries = false;
 };
 
+struct Win95PackTextReportOptions {
+  std::size_t preview_character_limit = 160;
+};
+
 struct Win95DataContainerProbeError {
   std::filesystem::path requested_path;
   std::string message;
@@ -151,6 +163,14 @@ constexpr std::size_t k_default_win95_container_max_file_load_bytes = 64 * 1024 
     const Win95PackContainerResource& container,
     std::size_t entry_index);
 [[nodiscard]] ParseResult<Win95PackIlbmExtraction> extract_win95_pack_ilbm_entry(
+    std::span<const std::uint8_t> container_bytes,
+    const Win95PackContainerResource& container,
+    std::size_t entry_index);
+[[nodiscard]] ParseResult<Win95PackTextExtraction> extract_win95_pack_text_entry(
+    std::span<const std::byte> container_bytes,
+    const Win95PackContainerResource& container,
+    std::size_t entry_index);
+[[nodiscard]] ParseResult<Win95PackTextExtraction> extract_win95_pack_text_entry(
     std::span<const std::uint8_t> container_bytes,
     const Win95PackContainerResource& container,
     std::size_t entry_index);
@@ -181,5 +201,8 @@ constexpr std::size_t k_default_win95_container_max_file_load_bytes = 64 * 1024 
     const Win95PackIlbmIndex& index,
     std::string_view source_label = "",
     Win95PackIlbmIndexReportOptions options = {});
+[[nodiscard]] std::string format_win95_pack_text_report(const Win95PackTextExtraction& extraction,
+                                                        std::string_view source_label = "",
+                                                        Win95PackTextReportOptions options = {});
 
 }  // namespace romulus::data

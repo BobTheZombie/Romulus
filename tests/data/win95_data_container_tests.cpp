@@ -5,6 +5,7 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -238,6 +239,28 @@ std::vector<std::uint8_t> make_pack_with_multiple_successful_ilbm_entries_fixtur
   bytes.insert(bytes.end(), valid_a.begin(), valid_a.end());
   bytes.insert(bytes.end(), malformed_ilbm.begin(), malformed_ilbm.end());
   bytes.insert(bytes.end(), valid_b.begin(), valid_b.end());
+  return bytes;
+}
+
+std::vector<std::uint8_t> make_pack_with_text_like_fixture() {
+  const std::vector<std::uint8_t> text_payload = {
+      'R', 'O', 'M', 'U', 'L', 'U', 'S', '\n',
+      'P', 'A', 'C', 'K', '\t', 'T', 'E', 'X', 'T', '\n'};
+  const std::vector<std::uint8_t> binary_payload = {0xFF, 0x00, 0xAA, 0x55};
+
+  std::vector<std::uint8_t> bytes;
+  bytes.insert(bytes.end(), {'P', 'A', 'C', 'K'});
+  append_u32_le(bytes, 2);
+
+  const std::uint32_t table_end = 8 + (2 * 8);
+  const std::uint32_t entry0_offset = table_end;
+  const std::uint32_t entry1_offset = entry0_offset + static_cast<std::uint32_t>(text_payload.size());
+  append_u32_le(bytes, entry0_offset);
+  append_u32_le(bytes, static_cast<std::uint32_t>(text_payload.size()));
+  append_u32_le(bytes, entry1_offset);
+  append_u32_le(bytes, static_cast<std::uint32_t>(binary_payload.size()));
+  bytes.insert(bytes.end(), text_payload.begin(), text_payload.end());
+  bytes.insert(bytes.end(), binary_payload.begin(), binary_payload.end());
   return bytes;
 }
 
@@ -711,6 +734,147 @@ int test_index_lookup_and_export_path_behavior() {
   return assert_true(file_size > 0, "exported PPM output should be non-empty");
 }
 
+int test_extract_pack_text_entry_success_and_preview_report() {
+  const auto bytes = make_pack_with_text_like_fixture();
+  const auto parsed = romulus::data::parse_win95_pack_container(bytes);
+  if (assert_true(parsed.ok(), "text-like extraction test requires valid PACK parse") != 0) {
+    return 1;
+  }
+
+  const auto extracted = romulus::data::extract_win95_pack_text_entry(bytes, parsed.value.value(), 0);
+  if (assert_true(extracted.ok(), "text-like entry should extract successfully") != 0) {
+    return 1;
+  }
+
+  if (assert_true(extracted.value->character_count == extracted.value->entry.size,
+                  "character count should match payload byte count for bounded ASCII text") != 0) {
+    return 1;
+  }
+
+  if (assert_true(extracted.value->line_count == 3, "line count should be deterministic from newline count") != 0) {
+    return 1;
+  }
+
+  const auto report = romulus::data::format_win95_pack_text_report(
+      extracted.value.value(),
+      "DATA",
+      romulus::data::Win95PackTextReportOptions{
+          .preview_character_limit = 8,
+      });
+  if (assert_true(report.find("# Caesar II Win95 PACK Text Entry Report") != std::string::npos,
+                  "text report should include stable title") != 0) {
+    return 1;
+  }
+  if (assert_true(report.find("entry_index: 0") != std::string::npos,
+                  "text report should include deterministic entry index") != 0) {
+    return 1;
+  }
+  if (assert_true(report.find("text_preview_truncated: yes") != std::string::npos,
+                  "text report should explicitly mark truncated previews") != 0) {
+    return 1;
+  }
+  return assert_true(report.find("line_count: 3") != std::string::npos,
+                     "text report should include bounded line count");
+}
+
+int test_extract_pack_text_entry_rejects_invalid_index() {
+  const auto bytes = make_pack_with_text_like_fixture();
+  const auto parsed = romulus::data::parse_win95_pack_container(bytes);
+  if (assert_true(parsed.ok(), "invalid text index test requires valid PACK parse") != 0) {
+    return 1;
+  }
+
+  const auto extracted = romulus::data::extract_win95_pack_text_entry(bytes, parsed.value.value(), 5);
+  if (assert_true(!extracted.ok(), "invalid text entry index should fail") != 0) {
+    return 1;
+  }
+
+  return assert_true(extracted.error->message.find("Invalid PACK entry index") != std::string::npos,
+                     "invalid text index error should be explicit");
+}
+
+int test_extract_pack_text_entry_rejects_non_text_like_classification() {
+  const auto bytes = make_pack_with_text_like_fixture();
+  const auto parsed = romulus::data::parse_win95_pack_container(bytes);
+  if (assert_true(parsed.ok(), "classification rejection test requires valid PACK parse") != 0) {
+    return 1;
+  }
+
+  const auto extracted = romulus::data::extract_win95_pack_text_entry(bytes, parsed.value.value(), 1);
+  if (assert_true(!extracted.ok(), "non-text-like entries should remain unsupported for text extraction") != 0) {
+    return 1;
+  }
+
+  return assert_true(extracted.error->message.find("unsupported for text extraction") != std::string::npos,
+                     "non-text-like classification rejection should be explicit");
+}
+
+int test_extract_pack_text_entry_rejects_truncated_payload_bounds() {
+  const auto bytes = make_pack_with_text_like_fixture();
+  const auto parsed = romulus::data::parse_win95_pack_container(bytes);
+  if (assert_true(parsed.ok(), "truncated text payload test requires valid PACK parse") != 0) {
+    return 1;
+  }
+
+  std::vector<std::uint8_t> truncated = bytes;
+  truncated.resize(parsed.value->entries[0].end_offset - 1);
+  const auto extracted = romulus::data::extract_win95_pack_text_entry(truncated, parsed.value.value(), 0);
+  if (assert_true(!extracted.ok(), "truncated text payload bounds should fail extraction") != 0) {
+    return 1;
+  }
+
+  return assert_true(extracted.error->message.find("exceeds container bounds") != std::string::npos,
+                     "truncated text payload should report bounded extraction failure");
+}
+
+int test_extract_pack_text_entry_rejects_malformed_non_decodable_payload() {
+  auto bytes = make_pack_with_text_like_fixture();
+  const auto parsed = romulus::data::parse_win95_pack_container(bytes);
+  if (assert_true(parsed.ok(), "malformed text test requires valid PACK parse") != 0) {
+    return 1;
+  }
+
+  bytes[parsed.value->entries[0].offset] = 0x1BU;
+  const auto extracted = romulus::data::extract_win95_pack_text_entry(bytes, parsed.value.value(), 0);
+  if (assert_true(!extracted.ok(), "control-byte text payload should fail bounded text validation") != 0) {
+    return 1;
+  }
+
+  return assert_true(extracted.error->message.find("failed text validation") != std::string::npos,
+                     "malformed text payload failure should be explicit");
+}
+
+int test_extract_pack_text_export_path_behavior() {
+  const auto bytes = make_pack_with_text_like_fixture();
+  const auto parsed = romulus::data::parse_win95_pack_container(bytes);
+  if (assert_true(parsed.ok(), "text export test requires valid PACK parse") != 0) {
+    return 1;
+  }
+
+  const auto extracted = romulus::data::extract_win95_pack_text_entry(bytes, parsed.value.value(), 0);
+  if (assert_true(extracted.ok(), "text export test requires successful text extraction") != 0) {
+    return 1;
+  }
+
+  const auto output_path = std::filesystem::temp_directory_path() / "romulus_pack_text_export.txt";
+  std::ofstream output(output_path, std::ios::out | std::ios::binary | std::ios::trunc);
+  if (assert_true(output.is_open(), "text export path should open temporary file") != 0) {
+    return 1;
+  }
+
+  output.write(extracted.value->decoded_text.data(),
+               static_cast<std::streamsize>(extracted.value->decoded_text.size()));
+  output.close();
+  if (assert_true(std::filesystem::exists(output_path), "text export should create output file") != 0) {
+    return 1;
+  }
+
+  const auto file_size = std::filesystem::file_size(output_path);
+  std::filesystem::remove(output_path);
+  return assert_true(file_size == extracted.value->decoded_text.size(),
+                     "exported text file should preserve decoded text size");
+}
+
 }  // namespace
 
 int main() {
@@ -779,6 +943,30 @@ int main() {
   }
 
   if (test_index_lookup_and_export_path_behavior() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_extract_pack_text_entry_success_and_preview_report() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_extract_pack_text_entry_rejects_invalid_index() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_extract_pack_text_entry_rejects_non_text_like_classification() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_extract_pack_text_entry_rejects_truncated_payload_bounds() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_extract_pack_text_entry_rejects_malformed_non_decodable_payload() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_extract_pack_text_export_path_behavior() != 0) {
     return EXIT_FAILURE;
   }
 
