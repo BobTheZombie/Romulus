@@ -152,6 +152,8 @@ int test_destination_rect_calculation_by_mode_is_deterministic() {
       sprite, romulus::platform::SpritePlacementMode::BottomLeft);
   const auto centered = romulus::platform::compute_sprite_destination_rect(
       sprite, romulus::platform::SpritePlacementMode::Centered);
+  const auto top_center = romulus::platform::compute_sprite_destination_rect(
+      sprite, romulus::platform::SpritePlacementMode::TopCenter);
   const auto bottom_center = romulus::platform::compute_sprite_destination_rect(
       sprite, romulus::platform::SpritePlacementMode::BottomCenter);
 
@@ -164,8 +166,38 @@ int test_destination_rect_calculation_by_mode_is_deterministic() {
   if (assert_true(centered.x == 7 && centered.y == 18, "centered placement should subtract half width/height") != 0) {
     return 1;
   }
+  if (assert_true(top_center.x == 7 && top_center.y == 20,
+                  "top-center placement should subtract half width while preserving descriptor y") != 0) {
+    return 1;
+  }
   return assert_true(bottom_center.x == 7 && bottom_center.y == 16,
                      "bottom-center placement should subtract half width and full height");
+}
+
+int test_asset_specific_mapping_for_rat_back_is_deterministic() {
+  if (assert_true(romulus::platform::resolve_sprite_placement_mode(
+                      "RAT_BACK.PL8", 0, romulus::platform::SpritePlacementMode::TopLeft) ==
+                      romulus::platform::SpritePlacementMode::TopCenter,
+                  "RAT_BACK sprite[0] should use top-center placement") != 0) {
+    return 1;
+  }
+  if (assert_true(romulus::platform::resolve_sprite_placement_mode(
+                      "rat_back.pl8", 1, romulus::platform::SpritePlacementMode::TopLeft) ==
+                      romulus::platform::SpritePlacementMode::BottomCenter,
+                  "RAT_BACK sprite[1] should use bottom-center placement") != 0) {
+    return 1;
+  }
+  return assert_true(romulus::platform::resolve_sprite_placement_mode(
+                         "assets/rat_back.pl8", 2, romulus::platform::SpritePlacementMode::Centered) ==
+                         romulus::platform::SpritePlacementMode::BottomCenter,
+                     "RAT_BACK sprite[2] should use bottom-center placement regardless of fallback");
+}
+
+int test_asset_specific_mapping_fallback_is_unchanged_for_non_rat_back() {
+  return assert_true(romulus::platform::resolve_sprite_placement_mode(
+                         "forum.pl8", 0, romulus::platform::SpritePlacementMode::Centered) ==
+                         romulus::platform::SpritePlacementMode::Centered,
+                     "non-RAT_BACK assets should preserve configured fallback placement mode");
 }
 
 int test_sprite_isolation_selection_behavior() {
@@ -207,8 +239,9 @@ int test_placement_report_formatting_is_stable() {
                   "header should include deterministic placement metadata") != 0) {
     return 1;
   }
-  return assert_true(report.find("sprite[0]: w=5 h=6 x=3 y=4 tile_type=0 dest=(3,4,5x6)") != std::string::npos,
-                     "entry should include deterministic dimensions, descriptor, and destination rect");
+  return assert_true(report.find("sprite[0]: w=5 h=6 x=3 y=4 tile_type=0 mode=top_left dest=(3,4,5x6)") !=
+                         std::string::npos,
+                     "entry should include deterministic dimensions, descriptor, resolved mode, and destination rect");
 }
 
 int test_bounds_clipping_under_bottom_left_rule() {
@@ -253,6 +286,12 @@ int main() {
     return EXIT_FAILURE;
   }
   if (test_destination_rect_calculation_by_mode_is_deterministic() != 0) {
+    return EXIT_FAILURE;
+  }
+  if (test_asset_specific_mapping_for_rat_back_is_deterministic() != 0) {
+    return EXIT_FAILURE;
+  }
+  if (test_asset_specific_mapping_fallback_is_unchanged_for_non_rat_back() != 0) {
     return EXIT_FAILURE;
   }
   if (test_sprite_isolation_selection_behavior() != 0) {

@@ -189,7 +189,11 @@ void blend_rgba_layers(romulus::data::RgbaImage* destination, const romulus::dat
         }
 
         const auto placed_overlay = compose_sprite_layer_to_canvas(
-            result.composed_image.width, result.composed_image.height, sprite_overlay.value->decoded_sprites);
+            result.composed_image.width,
+            result.composed_image.height,
+            sprite_overlay.value->decoded_sprites,
+            {},
+            selection->image_pl8_logical_path.string());
         if (!placed_overlay.has_value()) {
           romulus::core::log_warning("Forum compose overlay skipped: full-canvas placement failed for image='" +
                                      selection->image_pl8_logical_path.string() + "'");
@@ -380,7 +384,7 @@ int Application::run() {
       forum_debug_sprites_ = forum_result->sprite_debug_sprites;
       if (!forum_debug_sprites_.empty()) {
         romulus::core::log_info(
-            "Forum sprite placement debug controls: [1-4]=mode [0]=show all [[]/[]]=isolate prev/next [r]=reverse order");
+            "Forum sprite placement debug controls: [1-5]=mode [0]=show all [[]/[]]=isolate prev/next [r]=reverse order");
       }
     }
     if (!options_.debug_view_image.has_value() && options_.startup_image_override.has_value()) {
@@ -474,6 +478,8 @@ int Application::run() {
         } else if (event.key.keysym.sym == SDLK_3) {
           forum_debug_options_.placement_mode = SpritePlacementMode::Centered;
         } else if (event.key.keysym.sym == SDLK_4) {
+          forum_debug_options_.placement_mode = SpritePlacementMode::TopCenter;
+        } else if (event.key.keysym.sym == SDLK_5) {
           forum_debug_options_.placement_mode = SpritePlacementMode::BottomCenter;
         } else if (event.key.keysym.sym == SDLK_0) {
           forum_debug_options_.isolated_sprite_index.reset();
