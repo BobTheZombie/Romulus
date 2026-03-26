@@ -106,6 +106,33 @@ struct Win95PackIlbmBatchReportOptions {
   bool include_all_entries = false;
 };
 
+struct Win95PackTextBatchEntryResult {
+  std::size_t entry_index = 0;
+  std::size_t offset = 0;
+  std::size_t size = 0;
+  std::string classification_hint;
+  bool decode_success = false;
+  std::optional<std::string> failure_reason;
+  std::optional<std::size_t> line_count;
+  std::optional<std::size_t> character_count;
+  std::optional<std::string> text_preview;
+};
+
+struct Win95PackTextBatchResult {
+  std::size_t total_entry_count = 0;
+  std::size_t candidate_entry_count = 0;
+  std::size_t decoded_entry_count = 0;
+  std::size_t failed_entry_count = 0;
+  std::vector<Win95PackTextBatchEntryResult> entry_results;
+  std::vector<Win95PackMagicFrequency> failure_reason_frequencies;
+};
+
+struct Win95PackTextBatchReportOptions {
+  std::size_t preview_entry_limit = 8;
+  bool include_all_entries = false;
+  std::size_t preview_character_limit = 80;
+};
+
 struct Win95PackIlbmIndexEntry {
   std::size_t entry_index = 0;
   std::size_t offset = 0;
@@ -131,6 +158,28 @@ struct Win95PackIlbmExportResult {
 };
 
 struct Win95PackIlbmIndexReportOptions {
+  std::size_t preview_entry_limit = 8;
+  bool include_all_entries = false;
+};
+
+struct Win95PackTextIndexEntry {
+  std::size_t entry_index = 0;
+  std::size_t offset = 0;
+  std::size_t size = 0;
+  std::size_t line_count = 0;
+  std::size_t character_count = 0;
+  std::string classification_hint;
+  std::string text_preview;
+};
+
+struct Win95PackTextIndex {
+  std::size_t total_entry_count = 0;
+  std::size_t candidate_entry_count = 0;
+  std::size_t successful_entry_count = 0;
+  std::vector<Win95PackTextIndexEntry> successful_entries;
+};
+
+struct Win95PackTextIndexReportOptions {
   std::size_t preview_entry_limit = 8;
   bool include_all_entries = false;
 };
@@ -180,9 +229,20 @@ constexpr std::size_t k_default_win95_container_max_file_load_bytes = 64 * 1024 
 [[nodiscard]] Win95PackIlbmBatchResult analyze_win95_pack_ilbm_batch(
     std::span<const std::uint8_t> container_bytes,
     const Win95PackContainerResource& container);
+[[nodiscard]] Win95PackTextBatchResult analyze_win95_pack_text_batch(std::span<const std::byte> container_bytes,
+                                                                      const Win95PackContainerResource& container,
+                                                                      std::size_t preview_character_limit = 80);
+[[nodiscard]] Win95PackTextBatchResult analyze_win95_pack_text_batch(
+    std::span<const std::uint8_t> container_bytes,
+    const Win95PackContainerResource& container,
+    std::size_t preview_character_limit = 80);
 [[nodiscard]] Win95PackIlbmIndex build_win95_pack_ilbm_success_index(const Win95PackIlbmBatchResult& batch_result);
+[[nodiscard]] Win95PackTextIndex build_win95_pack_text_success_index(const Win95PackTextBatchResult& batch_result);
 [[nodiscard]] std::optional<Win95PackIlbmIndexEntry> find_win95_pack_ilbm_index_entry(
     const Win95PackIlbmIndex& index,
+    std::size_t entry_index);
+[[nodiscard]] std::optional<Win95PackTextIndexEntry> find_win95_pack_text_index_entry(
+    const Win95PackTextIndex& index,
     std::size_t entry_index);
 
 [[nodiscard]] ProbeWin95DataContainerResult probe_win95_data_container_file(
@@ -197,10 +257,18 @@ constexpr std::size_t k_default_win95_container_max_file_load_bytes = 64 * 1024 
     const Win95PackIlbmBatchResult& result,
     std::string_view source_label = "",
     Win95PackIlbmBatchReportOptions options = {});
+[[nodiscard]] std::string format_win95_pack_text_batch_report(
+    const Win95PackTextBatchResult& result,
+    std::string_view source_label = "",
+    Win95PackTextBatchReportOptions options = {});
 [[nodiscard]] std::string format_win95_pack_ilbm_index_report(
     const Win95PackIlbmIndex& index,
     std::string_view source_label = "",
     Win95PackIlbmIndexReportOptions options = {});
+[[nodiscard]] std::string format_win95_pack_text_index_report(
+    const Win95PackTextIndex& index,
+    std::string_view source_label = "",
+    Win95PackTextIndexReportOptions options = {});
 [[nodiscard]] std::string format_win95_pack_text_report(const Win95PackTextExtraction& extraction,
                                                         std::string_view source_label = "",
                                                         Win95PackTextReportOptions options = {});
