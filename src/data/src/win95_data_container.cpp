@@ -446,7 +446,7 @@ Win95PackIlbmBatchResult analyze_win95_pack_ilbm_batch(std::span<const std::byte
     entry_result.parse_success = true;
     entry_result.width = extracted.value->ilbm.width;
     entry_result.height = extracted.value->ilbm.height;
-    entry_result.palette_color_count = extracted.value->ilbm.palette.colors.size();
+    entry_result.palette_color_count = extracted.value->ilbm.palette_entries.size();
     result.entry_results.push_back(std::move(entry_result));
   }
 
@@ -472,6 +472,42 @@ Win95PackIlbmBatchResult analyze_win95_pack_ilbm_batch(std::span<const std::uint
   return analyze_win95_pack_ilbm_batch(
       std::span<const std::byte>(reinterpret_cast<const std::byte*>(container_bytes.data()), container_bytes.size()),
       container);
+}
+
+Win95PackIlbmIndex build_win95_pack_ilbm_success_index(const Win95PackIlbmBatchResult& batch_result) {
+  Win95PackIlbmIndex index;
+  index.total_entry_count = batch_result.total_entry_count;
+  index.candidate_entry_count = batch_result.candidate_entry_count;
+
+  for (const auto& entry_result : batch_result.entry_results) {
+    if (!entry_result.parse_success) {
+      continue;
+    }
+
+    index.successful_entries.push_back(Win95PackIlbmIndexEntry{
+        .entry_index = entry_result.entry_index,
+        .offset = entry_result.offset,
+        .size = entry_result.size,
+        .width = entry_result.width.value_or(0),
+        .height = entry_result.height.value_or(0),
+        .palette_color_count = entry_result.palette_color_count,
+        .classification_hint = entry_result.classification_hint,
+    });
+  }
+
+  index.successful_entry_count = index.successful_entries.size();
+  return index;
+}
+
+std::optional<Win95PackIlbmIndexEntry> find_win95_pack_ilbm_index_entry(const Win95PackIlbmIndex& index,
+                                                                         const std::size_t entry_index) {
+  for (const auto& entry : index.successful_entries) {
+    if (entry.entry_index == entry_index) {
+      return entry;
+    }
+  }
+
+  return std::nullopt;
 }
 
 ProbeWin95DataContainerResult probe_win95_data_container_file(const std::filesystem::path& data_root,
@@ -589,6 +625,43 @@ std::string format_win95_pack_ilbm_batch_report(const Win95PackIlbmBatchResult& 
 
   if (entry_limit < result.entry_results.size()) {
     output << "ilbm_entries_preview_truncated: yes\n";
+  }
+
+  return output.str();
+}
+
+std::string format_win95_pack_ilbm_index_report(const Win95PackIlbmIndex& index,
+                                                std::string_view source_label,
+                                                const Win95PackIlbmIndexReportOptions options) {
+  std::ostringstream output;
+  output << "# Caesar II Win95 PACK ILBM Success Index Report\n";
+  if (!source_label.empty()) {
+    output << "source: " << source_label << "\n";
+  }
+
+  output << "total_entries: " << index.total_entry_count << "\n";
+  output << "possible_ilbm_entries: " << index.candidate_entry_count << "\n";
+  output << "successful_ilbm_entries: " << index.successful_entry_count << "\n";
+
+  const auto entry_limit = options.include_all_entries
+                               ? index.successful_entries.size()
+                               : std::min<std::size_t>(options.preview_entry_limit, index.successful_entries.size());
+  output << "successful_entries_preview: showing " << entry_limit << " of " << index.successful_entries.size() << "\n";
+
+  for (std::size_t current = 0; current < entry_limit; ++current) {
+    const auto& entry = index.successful_entries[current];
+    output << "  - index: " << entry.entry_index
+           << " offset=" << entry.offset
+           << " size=" << entry.size
+           << " class=" << entry.classification_hint
+           << " width=" << entry.width
+           << " height=" << entry.height
+           << " palette_colors=" << entry.palette_color_count.value_or(0)
+           << "\n";
+  }
+
+  if (entry_limit < index.successful_entries.size()) {
+    output << "successful_entries_preview_truncated: yes\n";
   }
 
   return output.str();
