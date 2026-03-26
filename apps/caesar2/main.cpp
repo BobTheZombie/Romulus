@@ -69,6 +69,8 @@ struct ParsedArguments {
   bool index_pack_text_entries_all = false;
   std::optional<std::string> index_pack_ilbm_container_file;
   bool index_pack_ilbm_entries_all = false;
+  std::optional<std::string> index_pack_known_container_file;
+  bool index_pack_known_entries_all = false;
   std::optional<std::string> export_pack_text_success_container_file;
   std::optional<std::size_t> export_pack_text_success_entry_index;
   std::optional<std::string> export_pack_text_first_container_file;
@@ -439,6 +441,21 @@ struct ParsedArguments {
       continue;
     }
 
+    if (argument == "--index-pack-known") {
+      if (index + 1 >= argc) {
+        romulus::core::log_error("--index-pack-known requires <container>.");
+        return std::nullopt;
+      }
+
+      parsed.index_pack_known_container_file = argv[++index];
+      continue;
+    }
+
+    if (argument == "--index-pack-known-entries-all") {
+      parsed.index_pack_known_entries_all = true;
+      continue;
+    }
+
     if (argument == "--export-pack-ilbm-success") {
       if (index + 2 >= argc) {
         romulus::core::log_error("--export-pack-ilbm-success requires <container> <entry_index>.");
@@ -778,6 +795,7 @@ struct ParsedArguments {
   const bool has_pack_ilbm_batch_probe = parsed.probe_pack_ilbm_batch_container_file.has_value();
   const bool has_pack_text_index = parsed.index_pack_text_container_file.has_value();
   const bool has_pack_ilbm_index = parsed.index_pack_ilbm_container_file.has_value();
+  const bool has_pack_known_index = parsed.index_pack_known_container_file.has_value();
   const bool has_pack_text_success_export = parsed.export_pack_text_success_container_file.has_value();
   const bool has_pack_text_first_export = parsed.export_pack_text_first_container_file.has_value();
   const bool has_pack_ilbm_success_export = parsed.export_pack_ilbm_success_container_file.has_value();
@@ -793,6 +811,7 @@ struct ParsedArguments {
                                    static_cast<int>(has_pack_ilbm_batch_probe) +
                                    static_cast<int>(has_pack_text_index) +
                                    static_cast<int>(has_pack_ilbm_index) +
+                                   static_cast<int>(has_pack_known_index) +
                                    static_cast<int>(has_pack_text_success_export) +
                                    static_cast<int>(has_pack_text_first_export) +
                                    static_cast<int>(has_pack_ilbm_success_export) +
@@ -832,9 +851,14 @@ struct ParsedArguments {
     romulus::core::log_error("--index-pack-text-entries-all requires --index-pack-text.");
     return std::nullopt;
   }
+  if (parsed.index_pack_known_entries_all && !has_pack_known_index) {
+    romulus::core::log_error("--index-pack-known-entries-all requires --index-pack-known.");
+    return std::nullopt;
+  }
 
   if (has_pack_ilbm_probe || has_pack_text_probe || has_pack_pl8_probe || has_pack_text_batch_probe || has_pack_ilbm_batch_probe ||
-      has_pack_text_index || has_pack_ilbm_index || has_pack_text_success_export || has_pack_text_first_export ||
+      has_pack_text_index || has_pack_ilbm_index || has_pack_known_index ||
+      has_pack_text_success_export || has_pack_text_first_export ||
       has_pack_ilbm_success_export || has_pack_ilbm_first_export || has_pack_ilbm_extract || has_pack_ilbm_view ||
       has_pack_text_export || has_pack_pl8_export) {
     const bool has_other_mode = parsed.inventory_manifest || parsed.probe_file.has_value() ||
@@ -1532,6 +1556,25 @@ int run_pack_text_index(const std::filesystem::path& data_root,
   return 0;
 }
 
+int run_pack_known_index(const std::filesystem::path& data_root,
+                         const std::string& container_file_arg,
+                         const bool include_all_entries) {
+  const auto loaded = load_pack_container(data_root, container_file_arg);
+  if (!loaded.has_value()) {
+    return 1;
+  }
+
+  const auto index = romulus::data::build_win95_pack_unified_success_index(loaded->bytes, loaded->container, 80);
+  std::cout << romulus::data::format_win95_pack_unified_success_index_report(
+      index,
+      container_file_arg,
+      romulus::data::Win95PackUnifiedSuccessReportOptions{
+          .preview_entry_limit = 8,
+          .include_all_entries = include_all_entries,
+      });
+  return 0;
+}
+
 int run_pack_ilbm_success_export(const std::filesystem::path& data_root,
                                  const std::string& container_file_arg,
                                  const std::size_t entry_index,
@@ -1897,6 +1940,8 @@ int main(int argc, char* argv[]) {
         "[--index-pack-text-entries-all] "
         "[--index-pack-ilbm <container>] "
         "[--index-pack-ilbm-entries-all] "
+        "[--index-pack-known <container>] "
+        "[--index-pack-known-entries-all] "
         "[--export-pack-text-success <container> <entry_index> --export-output <path>] "
         "[--export-pack-text-first <container> <count> --export-output-dir <dir>] "
         "[--export-pack-ilbm-success <container> <entry_index> --export-output <path>] "
@@ -1939,6 +1984,7 @@ int main(int argc, char* argv[]) {
                                          parsed->probe_pack_ilbm_batch_container_file.has_value() ||
                                          parsed->index_pack_text_container_file.has_value() ||
                                          parsed->index_pack_ilbm_container_file.has_value() ||
+                                         parsed->index_pack_known_container_file.has_value() ||
                                          parsed->export_pack_text_success_container_file.has_value() ||
                                          parsed->export_pack_text_first_container_file.has_value() ||
                                          parsed->export_pack_ilbm_success_container_file.has_value() ||
@@ -2035,6 +2081,12 @@ int main(int argc, char* argv[]) {
     return run_pack_ilbm_index(data_root,
                                parsed->index_pack_ilbm_container_file.value(),
                                parsed->index_pack_ilbm_entries_all);
+  }
+
+  if (parsed->index_pack_known_container_file.has_value()) {
+    return run_pack_known_index(data_root,
+                                parsed->index_pack_known_container_file.value(),
+                                parsed->index_pack_known_entries_all);
   }
 
   if (parsed->export_pack_ilbm_success_container_file.has_value()) {

@@ -324,6 +324,37 @@ std::vector<std::uint8_t> make_pack_with_pl8_fixture() {
   return bytes;
 }
 
+std::vector<std::uint8_t> make_pack_with_mixed_known_families_fixture() {
+  const auto ilbm_payload = make_fixture_ilbm_payload();
+  const std::vector<std::uint8_t> text_payload = {'A', 'L', 'P', 'H', 'A', '\n', 'B', 'E', 'T', 'A', '\n'};
+  const auto pl8_payload = make_pl8_payload_fixture();
+  const std::vector<std::uint8_t> unknown_payload = {0x00, 0x01, 0x02, 0x03, 0x04};
+
+  std::vector<std::uint8_t> bytes;
+  bytes.insert(bytes.end(), {'P', 'A', 'C', 'K'});
+  append_u32_le(bytes, 4);
+  const std::uint32_t table_end = 8 + (4 * 8);
+  const std::uint32_t entry0 = table_end;
+  const std::uint32_t entry1 = entry0 + static_cast<std::uint32_t>(ilbm_payload.size());
+  const std::uint32_t entry2 = entry1 + static_cast<std::uint32_t>(text_payload.size());
+  const std::uint32_t entry3 = entry2 + static_cast<std::uint32_t>(pl8_payload.size());
+
+  append_u32_le(bytes, entry0);
+  append_u32_le(bytes, static_cast<std::uint32_t>(ilbm_payload.size()));
+  append_u32_le(bytes, entry1);
+  append_u32_le(bytes, static_cast<std::uint32_t>(text_payload.size()));
+  append_u32_le(bytes, entry2);
+  append_u32_le(bytes, static_cast<std::uint32_t>(pl8_payload.size()));
+  append_u32_le(bytes, entry3);
+  append_u32_le(bytes, static_cast<std::uint32_t>(unknown_payload.size()));
+
+  bytes.insert(bytes.end(), ilbm_payload.begin(), ilbm_payload.end());
+  bytes.insert(bytes.end(), text_payload.begin(), text_payload.end());
+  bytes.insert(bytes.end(), pl8_payload.begin(), pl8_payload.end());
+  bytes.insert(bytes.end(), unknown_payload.begin(), unknown_payload.end());
+  return bytes;
+}
+
 int test_parse_valid_pack_container() {
   const auto bytes = make_valid_pack_fixture();
   const auto parsed = romulus::data::parse_win95_pack_container(bytes);
@@ -1145,6 +1176,105 @@ int test_extract_pack_pl8_entry_export_behavior() {
                      "pack pl8 export file size should match bounded 768-byte payload");
 }
 
+int test_builds_unified_pack_success_index_across_supported_families() {
+  const auto bytes = make_pack_with_mixed_known_families_fixture();
+  const auto parsed = romulus::data::parse_win95_pack_container(bytes);
+  if (assert_true(parsed.ok(), "unified known index test requires valid PACK parse") != 0) {
+    return 1;
+  }
+
+  const auto index = romulus::data::build_win95_pack_unified_success_index(bytes, parsed.value.value(), 8);
+  if (assert_true(index.summary.total_entry_count == 4, "unified summary should report total PACK entries") != 0) {
+    return 1;
+  }
+  if (assert_true(index.summary.known_entry_count == 3, "unified summary should aggregate known family successes") != 0) {
+    return 1;
+  }
+  if (assert_true(index.summary.unknown_entry_count == 1, "unified summary should include unknown entry count") != 0) {
+    return 1;
+  }
+  if (assert_true(index.summary.ilbm_success_count == 1 && index.summary.text_success_count == 1 &&
+                      index.summary.pl8_success_count == 1,
+                  "unified summary should include deterministic per-family counts") != 0) {
+    return 1;
+  }
+  if (assert_true(index.successful_entries.size() == 3, "unified success entries should include only successful decodes") != 0) {
+    return 1;
+  }
+  if (assert_true(index.successful_entries[0].entry_index == 0 && index.successful_entries[1].entry_index == 1 &&
+                      index.successful_entries[2].entry_index == 2,
+                  "unified success entries should remain deterministic in entry index order") != 0) {
+    return 1;
+  }
+
+  if (assert_true(index.successful_entries[0].ilbm_width.value_or(0) == 2 &&
+                      index.successful_entries[0].ilbm_height.value_or(0) == 2,
+                  "unified ILBM entry should include compact width and height metadata") != 0) {
+    return 1;
+  }
+  if (assert_true(index.successful_entries[1].text_line_count.value_or(0) == 3 &&
+                      index.successful_entries[1].text_character_count.value_or(0) == 11 &&
+                      index.successful_entries[1].text_preview.value_or("").size() <= 8,
+                  "unified text entry should include compact bounded preview metadata") != 0) {
+    return 1;
+  }
+  return assert_true(index.successful_entries[2].pl8_palette_entry_count.value_or(0) ==
+                         romulus::data::Pl8Resource::kSupportedEntryCount,
+                     "unified PL8 entry should include supported layout palette count metadata");
+}
+
+int test_unified_pack_success_report_is_stable_and_bounded() {
+  const auto bytes = make_pack_with_mixed_known_families_fixture();
+  const auto parsed = romulus::data::parse_win95_pack_container(bytes);
+  if (assert_true(parsed.ok(), "unified report test requires valid PACK parse") != 0) {
+    return 1;
+  }
+
+  const auto index = romulus::data::build_win95_pack_unified_success_index(bytes, parsed.value.value(), 8);
+  const auto compact_report = romulus::data::format_win95_pack_unified_success_index_report(
+      index,
+      "DATA",
+      romulus::data::Win95PackUnifiedSuccessReportOptions{
+          .preview_entry_limit = 2,
+          .include_all_entries = false,
+      });
+  if (assert_true(compact_report.find("# Caesar II Win95 PACK Unified Success Index Report") != std::string::npos,
+                  "unified report should include stable title") != 0) {
+    return 1;
+  }
+  if (assert_true(compact_report.find("known_ratio: 3/4") != std::string::npos,
+                  "unified report should include compact known coverage ratio") != 0) {
+    return 1;
+  }
+  if (assert_true(compact_report.find("family_success_counts: ilbm=1 text=1 pl8=1") != std::string::npos,
+                  "unified report should include deterministic per-family summary counts") != 0) {
+    return 1;
+  }
+  if (assert_true(compact_report.find("successful_entries_preview: showing 2 of 3") != std::string::npos,
+                  "unified report should honor bounded preview mode") != 0) {
+    return 1;
+  }
+  if (assert_true(compact_report.find("successful_entries_preview_truncated: yes") != std::string::npos,
+                  "unified report should mark bounded preview truncation") != 0) {
+    return 1;
+  }
+
+  const auto all_report = romulus::data::format_win95_pack_unified_success_index_report(
+      index,
+      "DATA",
+      romulus::data::Win95PackUnifiedSuccessReportOptions{
+          .preview_entry_limit = 1,
+          .include_all_entries = true,
+      });
+  if (assert_true(all_report.find("successful_entries_preview: showing 3 of 3") != std::string::npos,
+                  "all-entry report mode should include every successful known entry") != 0) {
+    return 1;
+  }
+  return assert_true(all_report.find("family=pl8") != std::string::npos &&
+                         all_report.find("layout=simple-pl8") != std::string::npos,
+                     "all-entry report should include compact PL8 metadata markers");
+}
+
 }  // namespace
 
 int main() {
@@ -1269,6 +1399,14 @@ int main() {
   }
 
   if (test_extract_pack_pl8_entry_export_behavior() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_builds_unified_pack_success_index_across_supported_families() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_unified_pack_success_report_is_stable_and_bounded() != 0) {
     return EXIT_FAILURE;
   }
 
