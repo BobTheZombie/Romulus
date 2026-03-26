@@ -2153,7 +2153,7 @@ int run_pl8_sprite_pair_export(const std::filesystem::path& data_root,
     return 1;
   }
 
-  const auto exported = romulus::data::write_rgba_to_ppm(decoded->rgba_image, output_path);
+  const auto exported = romulus::data::export_rgba_image_as_ppm(decoded->rgba_image, output_path);
   if (!exported.ok()) {
     romulus::core::log_error(exported.error->message);
     return 1;
