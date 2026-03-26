@@ -13,6 +13,7 @@
 #include "romulus/core/logger.h"
 #include "romulus/data/data_root.h"
 #include "romulus/data/file_loader.h"
+#include "romulus/data/image256_resource.h"
 #include "romulus/data/ilbm_image.h"
 #include "romulus/platform/bootstrap.h"
 #include "romulus/platform/viewer.h"
@@ -65,6 +66,134 @@ constexpr auto kFixedStep = std::chrono::milliseconds(16);
                          std::string(selected->case_insensitive_resolution_attempted ? "yes" : "no") +
                          ", resolved='" + selected->absolute_path.string() + "'");
   return rgba.value;
+}
+
+void blend_rgba_layers(romulus::data::RgbaImage* destination, const romulus::data::RgbaImage& overlay) {
+  if (destination == nullptr) {
+    return;
+  }
+
+  if (destination->width != overlay.width || destination->height != overlay.height) {
+    return;
+  }
+
+  for (std::size_t i = 0; i + 3 < destination->pixels_rgba.size() && i + 3 < overlay.pixels_rgba.size(); i += 4) {
+    if (overlay.pixels_rgba[i + 3] == 0) {
+      continue;
+    }
+
+    destination->pixels_rgba[i] = overlay.pixels_rgba[i];
+    destination->pixels_rgba[i + 1] = overlay.pixels_rgba[i + 1];
+    destination->pixels_rgba[i + 2] = overlay.pixels_rgba[i + 2];
+    destination->pixels_rgba[i + 3] = overlay.pixels_rgba[i + 3];
+  }
+}
+
+[[nodiscard]] std::optional<romulus::data::RgbaImage> load_forum_composed_image(const std::filesystem::path& data_root,
+                                                                                 std::string* error_message) {
+  const auto background = select_forum_background_asset(data_root);
+  if (!background.has_value()) {
+    *error_message = "Unable to resolve forum background layer: data/forum.lbm.";
+    return std::nullopt;
+  }
+
+  romulus::core::log_info("Forum compose background resolved: requested='" + background->logical_path.string() +
+                          "', resolved='" + background->absolute_path.string() + "'");
+
+  const auto loaded_background = romulus::data::load_file_to_memory(background->absolute_path);
+  if (!loaded_background.ok()) {
+    *error_message = "Failed to load forum background '" + background->logical_path.string() +
+                     "': " + loaded_background.error->message;
+    return std::nullopt;
+  }
+  romulus::core::log_info("Forum compose background loaded: bytes=" +
+                          std::to_string(loaded_background.value->bytes.size()));
+
+  const auto parsed_background = romulus::data::parse_ilbm_image(loaded_background.value->bytes);
+  if (!parsed_background.ok()) {
+    *error_message = "Failed to parse forum background '" + background->logical_path.string() +
+                     "': " + parsed_background.error->message;
+    return std::nullopt;
+  }
+  romulus::core::log_info("Forum compose background parsed ILBM.");
+
+  const auto decoded_background = romulus::data::convert_ilbm_to_rgba(parsed_background.value.value());
+  if (!decoded_background.ok()) {
+    *error_message = "Failed to decode forum background '" + background->logical_path.string() +
+                     "': " + decoded_background.error->message;
+    return std::nullopt;
+  }
+  romulus::core::log_info("Forum compose background decoded RGBA " + std::to_string(decoded_background.value->width) +
+                          "x" + std::to_string(decoded_background.value->height));
+
+  romulus::data::RgbaImage composed = decoded_background.value.value();
+  for (const auto& overlay_spec : default_forum_overlay_specs()) {
+    romulus::core::log_info("Forum compose overlay resolving: image='" + overlay_spec.image256_path.string() +
+                            "', palette='" + overlay_spec.palette_pl8_path.string() + "'");
+    const auto selection = select_forum_overlay_asset(data_root, overlay_spec);
+    if (!selection.has_value()) {
+      romulus::core::log_warning("Forum compose overlay skipped: unable to resolve required files for image='" +
+                                 overlay_spec.image256_path.string() + "', palette='" +
+                                 overlay_spec.palette_pl8_path.string() + "'");
+      continue;
+    }
+
+    const auto dimensions = romulus::data::resolve_known_win95_256_dimensions(selection->image256_logical_path);
+    if (!dimensions.has_value()) {
+      romulus::core::log_warning("Forum compose overlay skipped: no known dimensions for image='" +
+                                 selection->image256_logical_path.string() + "'");
+      continue;
+    }
+
+    const auto loaded_image = romulus::data::load_file_to_memory(selection->image256_absolute_path);
+    if (!loaded_image.ok()) {
+      romulus::core::log_warning("Forum compose overlay skipped: failed to load image='" +
+                                 selection->image256_logical_path.string() + "' reason='" +
+                                 loaded_image.error->message + "'");
+      continue;
+    }
+
+    const auto loaded_palette = romulus::data::load_file_to_memory(selection->palette_pl8_absolute_path);
+    if (!loaded_palette.ok()) {
+      romulus::core::log_warning("Forum compose overlay skipped: failed to load palette='" +
+                                 selection->palette_pl8_logical_path.string() + "' reason='" +
+                                 loaded_palette.error->message + "'");
+      continue;
+    }
+
+    romulus::core::log_info("Forum compose overlay loaded: image='" + selection->image256_logical_path.string() +
+                            "' bytes=" + std::to_string(loaded_image.value->bytes.size()) + ", palette='" +
+                            selection->palette_pl8_logical_path.string() +
+                            "' bytes=" + std::to_string(loaded_palette.value->bytes.size()));
+
+    const auto decoded_overlay = romulus::data::decode_caesar2_win95_256_pl8_pair(loaded_image.value->bytes,
+                                                                                    loaded_palette.value->bytes,
+                                                                                    dimensions->first,
+                                                                                    dimensions->second,
+                                                                                    true);
+    if (!decoded_overlay.ok()) {
+      romulus::core::log_warning("Forum compose overlay skipped: decode failed for image='" +
+                                 selection->image256_logical_path.string() + "' reason='" +
+                                 decoded_overlay.error->message + "'");
+      continue;
+    }
+
+    if (decoded_overlay.value->rgba_image.width != composed.width ||
+        decoded_overlay.value->rgba_image.height != composed.height) {
+      romulus::core::log_warning("Forum compose overlay skipped: size mismatch image='" +
+                                 selection->image256_logical_path.string() + "' decoded=" +
+                                 std::to_string(decoded_overlay.value->rgba_image.width) + "x" +
+                                 std::to_string(decoded_overlay.value->rgba_image.height) + " background=" +
+                                 std::to_string(composed.width) + "x" + std::to_string(composed.height));
+      continue;
+    }
+
+    blend_rgba_layers(&composed, decoded_overlay.value->rgba_image);
+    romulus::core::log_info("Forum compose overlay composed: image='" + selection->image256_logical_path.string() +
+                            "', palette='" + selection->palette_pl8_logical_path.string() + "'");
+  }
+
+  return composed;
 }
 
 [[nodiscard]] int show_wizard_message_box(const SetupWizardSnapshot& snapshot) {
@@ -173,7 +302,17 @@ int Application::run() {
 
   if (!options_.debug_view_image.has_value()) {
     std::string bootstrap_error;
-    options_.debug_view_image = load_bootstrap_image(*options_.data_root, options_.startup_image_override, &bootstrap_error);
+    options_.debug_view_image = load_forum_composed_image(*options_.data_root, &bootstrap_error);
+    if (!options_.debug_view_image.has_value() && options_.startup_image_override.has_value()) {
+      romulus::core::log_warning("Forum composition path unavailable; trying override bootstrap image.");
+      options_.debug_view_image = load_bootstrap_image(*options_.data_root, options_.startup_image_override, &bootstrap_error);
+    }
+
+    if (!options_.debug_view_image.has_value() && !options_.startup_image_override.has_value()) {
+      romulus::core::log_warning("Forum composition path unavailable; falling back to bootstrap image candidates.");
+      options_.debug_view_image = load_bootstrap_image(*options_.data_root, std::nullopt, &bootstrap_error);
+    }
+
     if (!options_.debug_view_image.has_value()) {
       romulus::core::log_error(bootstrap_error);
       return 1;
