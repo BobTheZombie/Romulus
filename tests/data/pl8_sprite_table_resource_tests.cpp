@@ -320,6 +320,34 @@ int test_multi_sprite_report_format_is_stable() {
                      "report should include per-sprite decode/composition status");
 }
 
+int test_sprite_pair_decode_selected_index_from_multi_sprite_fixture() {
+  const auto image = make_multi_sprite_fixture();
+  const auto palette = make_256_palette_fixture();
+  const auto decoded = romulus::data::decode_caesar2_pl8_sprite_pair(image, palette, 1, true);
+  if (assert_true(decoded.ok(), "single-sprite decode by explicit index should succeed") != 0) {
+    return 1;
+  }
+
+  if (assert_true(decoded.value->sprite_index == 1, "decode result should preserve requested sprite index") != 0) {
+    return 1;
+  }
+
+  return assert_true(decoded.value->rgba_image.width == 2 && decoded.value->rgba_image.height == 2,
+                     "single-sprite decode should use sprite dimensions");
+}
+
+int test_sprite_pair_decode_fails_for_out_of_range_index() {
+  const auto image = make_multi_sprite_fixture();
+  const auto palette = make_256_palette_fixture();
+  const auto decoded = romulus::data::decode_caesar2_pl8_sprite_pair(image, palette, 99, true);
+  if (assert_true(!decoded.ok(), "out-of-range sprite index should fail") != 0) {
+    return 1;
+  }
+
+  return assert_true(decoded.error->message.find("out of range") != std::string::npos,
+                     "out-of-range sprite index failure should be explicit");
+}
+
 }  // namespace
 
 int main() {
@@ -337,6 +365,8 @@ int main() {
   rc |= test_multi_sprite_index_zero_transparency();
   rc |= test_multi_sprite_invalid_offset_fails();
   rc |= test_multi_sprite_report_format_is_stable();
+  rc |= test_sprite_pair_decode_selected_index_from_multi_sprite_fixture();
+  rc |= test_sprite_pair_decode_fails_for_out_of_range_index();
 
   if (rc == 0) {
     std::cout << "pl8_sprite_table_resource_tests: all tests passed\n";
