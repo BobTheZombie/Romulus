@@ -1086,12 +1086,12 @@ int test_extract_pack_pl8_entry_success_and_stable_report() {
   if (assert_true(extracted.ok(), "768-byte opaque payload should extract as supported PL8") != 0) {
     return 1;
   }
-  if (assert_true(extracted->pl8.palette_entries.size() == romulus::data::Pl8Resource::kSupportedEntryCount,
+  if (assert_true(extracted.value->pl8.palette_entries.size() == romulus::data::Pl8Resource::kSupportedEntryCount,
                   "pack PL8 extraction should decode 256 palette entries") != 0) {
     return 1;
   }
 
-  const auto report = romulus::data::format_pl8_report(extracted->pl8, 2);
+  const auto report = romulus::data::format_pl8_report(extracted.value->pl8, 2);
   if (assert_true(report.find("# Caesar II Win95 PL8 Report") != std::string::npos,
                   "pack PL8 probe should reuse stable PL8 report formatter") != 0) {
     return 1;
@@ -1138,7 +1138,7 @@ int test_extract_pack_pl8_entry_rejects_truncated_payload_bounds() {
   }
 
   std::vector<std::uint8_t> truncated = bytes;
-  truncated.resize(parsed->entries[0].end_offset - 1);
+  truncated.resize(parsed.value->entries[0].end_offset - 1);
   const auto extracted = romulus::data::extract_win95_pack_pl8_entry(truncated, parsed.value.value(), 0);
   if (assert_true(!extracted.ok(), "truncated pl8 payload bounds should fail extraction") != 0) {
     return 1;
@@ -1164,8 +1164,8 @@ int test_extract_pack_pl8_entry_export_behavior() {
   if (assert_true(output.is_open(), "pack pl8 export path should open temporary file") != 0) {
     return 1;
   }
-  output.write(reinterpret_cast<const char*>(extracted->payload_bytes.data()),
-               static_cast<std::streamsize>(extracted->payload_bytes.size()));
+  output.write(reinterpret_cast<const char*>(extracted.value->payload_bytes.data()),
+               static_cast<std::streamsize>(extracted.value->payload_bytes.size()));
   output.close();
   if (assert_true(std::filesystem::exists(output_path), "pack pl8 export should create output file") != 0) {
     return 1;
