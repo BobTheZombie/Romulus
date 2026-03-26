@@ -32,15 +32,17 @@ constexpr auto kFixedStep = std::chrono::milliseconds(16);
   const auto selected = select_bootstrap_asset(data_root, override_path);
   if (!selected.has_value()) {
     *error_message =
-        "Unable to find a startup ILBM asset under the configured data root. Tried data/forum.lbm, "
-        "data/empire2.lbm, and data/fading.lbm.";
+        "Unable to find a startup ILBM asset under the configured data root. Requested paths (case-insensitive "
+        "resolution attempted: yes): data/forum.lbm, data/empire2.lbm, data/fading.lbm.";
     return std::nullopt;
   }
 
   const auto loaded = romulus::data::load_file_to_memory(selected->absolute_path);
   if (!loaded.ok()) {
-    *error_message = "Failed to load bootstrap image '" + selected->logical_path.string() + "': " +
-                     loaded.error->message;
+    *error_message = "Failed to load bootstrap image requested='" + selected->logical_path.string() +
+                     "' (case-insensitive resolution attempted=" +
+                     std::string(selected->case_insensitive_resolution_attempted ? "yes" : "no") +
+                     ", resolved='" + selected->absolute_path.string() + "'): " + loaded.error->message;
     return std::nullopt;
   }
 
@@ -58,7 +60,10 @@ constexpr auto kFixedStep = std::chrono::milliseconds(16);
     return std::nullopt;
   }
 
-  romulus::core::log_info("Bootstrap image selected: " + selected->logical_path.string());
+  romulus::core::log_info("Bootstrap image selected: requested='" + selected->logical_path.string() +
+                         "', case-insensitive resolution attempted=" +
+                         std::string(selected->case_insensitive_resolution_attempted ? "yes" : "no") +
+                         ", resolved='" + selected->absolute_path.string() + "'");
   return rgba.value;
 }
 

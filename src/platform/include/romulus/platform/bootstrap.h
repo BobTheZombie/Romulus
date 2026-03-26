@@ -10,6 +10,7 @@ struct BootstrapAssetSelection {
   std::filesystem::path absolute_path;
   std::filesystem::path logical_path;
   bool used_override = false;
+  bool case_insensitive_resolution_attempted = false;
 };
 
 [[nodiscard]] std::vector<std::filesystem::path> default_bootstrap_asset_candidates();
