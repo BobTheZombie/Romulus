@@ -177,7 +177,7 @@ void blend_rgba_layers(romulus::data::RgbaImage* destination, const romulus::dat
         continue;
       }
 
-      decoded_overlay = romulus::data::Pl8Image256PairDecodeResult{
+      decoded_overlay.value = romulus::data::Pl8Image256PairDecodeResult{
           .image_pl8 = {.header_size = structured_overlay.value->image_pl8.header_size,
                         .payload_offset = structured_overlay.value->image_pl8.payload_offset,
                         .width = structured_overlay.value->image_pl8.width,
@@ -187,6 +187,7 @@ void blend_rgba_layers(romulus::data::RgbaImage* destination, const romulus::dat
           .palette_256 = structured_overlay.value->palette_256,
           .rgba_image = structured_overlay.value->rgba_image,
       };
+      decoded_overlay.error.reset();
     }
 
     if (decoded_overlay.value->rgba_image.width != composed.width ||
