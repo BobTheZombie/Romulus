@@ -15,6 +15,7 @@ struct ApplicationOptions {
   bool smoke_test = false;
   std::optional<std::filesystem::path> data_root;
   std::optional<romulus::data::RgbaImage> debug_view_image;
+  std::optional<std::filesystem::path> startup_image_override;
   FolderPicker folder_picker = pick_data_root_with_native_dialog;
   std::filesystem::path startup_config_path = default_startup_config_path();
 };
@@ -33,8 +34,8 @@ class Application {
   ApplicationOptions options_;
   SDL_Renderer* renderer_ = nullptr;
   SDL_Texture* viewer_texture_ = nullptr;
-  int viewer_window_width_ = 0;
-  int viewer_window_height_ = 0;
+  int viewer_texture_width_ = 0;
+  int viewer_texture_height_ = 0;
 };
 
 }  // namespace romulus::platform

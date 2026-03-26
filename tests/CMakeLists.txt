@@ -42,6 +42,10 @@ add_executable(romulus_viewer_tests platform/viewer_tests.cpp)
 target_link_libraries(romulus_viewer_tests PRIVATE romulus::platform)
 add_test(NAME romulus_viewer_tests COMMAND romulus_viewer_tests)
 
+add_executable(romulus_bootstrap_tests platform/bootstrap_tests.cpp)
+target_link_libraries(romulus_bootstrap_tests PRIVATE romulus::platform)
+add_test(NAME romulus_bootstrap_tests COMMAND romulus_bootstrap_tests)
+
 add_executable(romulus_map_resource_tests data/map_resource_tests.cpp)
 target_link_libraries(romulus_map_resource_tests PRIVATE romulus::data)
 add_test(NAME romulus_map_resource_tests COMMAND romulus_map_resource_tests)
