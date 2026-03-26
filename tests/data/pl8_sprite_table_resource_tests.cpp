@@ -55,6 +55,57 @@ std::vector<std::uint8_t> make_pl8_sprite_fixture(const std::uint16_t tile_type 
   return bytes;
 }
 
+std::vector<std::uint8_t> make_multi_sprite_fixture() {
+  std::vector<std::uint8_t> bytes(8 + (3 * 16) + 12, 0);
+  write_u16_le(bytes, 0, 0);
+  write_u16_le(bytes, 2, 3);
+  write_u32_le(bytes, 4, 0);
+
+  const std::size_t data_start = 8 + (3 * 16);
+
+  // sprite[0] at (1, 0), 2x2
+  write_u16_le(bytes, 8, 2);
+  write_u16_le(bytes, 10, 2);
+  write_u32_le(bytes, 12, static_cast<std::uint32_t>(data_start));
+  write_u16_le(bytes, 16, 1);
+  write_u16_le(bytes, 18, 0);
+  write_u16_le(bytes, 20, 0);
+  write_u16_le(bytes, 22, 0);
+
+  // sprite[1] at (0, 1), 2x2 - overlaps sprite[0] at (1,1)
+  write_u16_le(bytes, 24, 2);
+  write_u16_le(bytes, 26, 2);
+  write_u32_le(bytes, 28, static_cast<std::uint32_t>(data_start + 4));
+  write_u16_le(bytes, 32, 0);
+  write_u16_le(bytes, 34, 1);
+  write_u16_le(bytes, 36, 0);
+  write_u16_le(bytes, 38, 0);
+
+  // sprite[2] at (2, 1), 2x2
+  write_u16_le(bytes, 40, 2);
+  write_u16_le(bytes, 42, 2);
+  write_u32_le(bytes, 44, static_cast<std::uint32_t>(data_start + 8));
+  write_u16_le(bytes, 48, 2);
+  write_u16_le(bytes, 50, 1);
+  write_u16_le(bytes, 52, 0);
+  write_u16_le(bytes, 54, 0);
+
+  bytes[data_start] = 1;
+  bytes[data_start + 1] = 2;
+  bytes[data_start + 2] = 3;
+  bytes[data_start + 3] = 4;
+  bytes[data_start + 4] = 0;
+  bytes[data_start + 5] = 5;
+  bytes[data_start + 6] = 6;
+  bytes[data_start + 7] = 7;
+  bytes[data_start + 8] = 8;
+  bytes[data_start + 9] = 9;
+  bytes[data_start + 10] = 10;
+  bytes[data_start + 11] = 11;
+
+  return bytes;
+}
+
 std::vector<std::uint8_t> make_256_palette_fixture() {
   std::vector<std::uint8_t> bytes;
   bytes.reserve(romulus::data::Pl8Resource::kSupportedPayloadSize);
@@ -176,6 +227,99 @@ int test_sprite_pair_decode_with_256_palette_success() {
                      "index 0 should be transparent when requested");
 }
 
+int test_multi_sprite_decode_and_compose_success() {
+  const auto image = make_multi_sprite_fixture();
+  const auto palette = make_256_palette_fixture();
+  const auto decoded = romulus::data::decode_caesar2_pl8_sprite_pair_multi(image, palette, true);
+  if (assert_true(decoded.ok(), "multi-sprite decode should succeed") != 0) {
+    return 1;
+  }
+
+  if (assert_true(decoded.value->decoded_sprites.size() == 3, "all type-0 sprites should decode") != 0) {
+    return 1;
+  }
+
+  if (assert_true(decoded.value->composition.has_value(), "successful decode should produce composition") != 0) {
+    return 1;
+  }
+
+  const auto& composition = decoded.value->composition.value();
+  if (assert_true(composition.rgba_image.width == 4 && composition.rgba_image.height == 3,
+                  "composition canvas should use descriptor bounds") != 0) {
+    return 1;
+  }
+
+  return assert_true(composition.bounds.min_x == 0 && composition.bounds.min_y == 0 &&
+                         composition.bounds.max_x == 4 && composition.bounds.max_y == 3,
+                     "composed bounds should be deterministic");
+}
+
+int test_multi_sprite_composition_order_is_deterministic() {
+  const auto image = make_multi_sprite_fixture();
+  const auto palette = make_256_palette_fixture();
+  const auto decoded = romulus::data::decode_caesar2_pl8_sprite_pair_multi(image, palette, true);
+  if (assert_true(decoded.ok() && decoded.value->composition.has_value(), "composition should succeed") != 0) {
+    return 1;
+  }
+
+  // pixel (1,1) is covered by sprite[0] index=4 then sprite[1] index=5, so descriptor-order overwrite => index 5.
+  const auto& rgba = decoded.value->composition->rgba_image;
+  const std::size_t offset = ((1 * rgba.width) + 1) * 4;
+  return assert_true(rgba.pixels_rgba[offset] == 20, "later sprite should deterministically overwrite overlap");
+}
+
+int test_multi_sprite_index_zero_transparency() {
+  const auto image = make_multi_sprite_fixture();
+  const auto palette = make_256_palette_fixture();
+  const auto decoded = romulus::data::decode_caesar2_pl8_sprite_pair_multi(image, palette, true);
+  if (assert_true(decoded.ok() && decoded.value->composition.has_value(), "composition should succeed") != 0) {
+    return 1;
+  }
+
+  // sprite[1] pixel (0,0) is index 0 at composed location (0,1), should remain transparent.
+  const auto& rgba = decoded.value->composition->rgba_image;
+  const std::size_t offset = ((1 * rgba.width) + 0) * 4 + 3;
+  return assert_true(rgba.pixels_rgba[offset] == 0, "index 0 should be transparent in composition");
+}
+
+int test_multi_sprite_invalid_offset_fails() {
+  auto image = make_multi_sprite_fixture();
+  write_u32_le(image, 44, static_cast<std::uint32_t>(image.size() - 1));
+  const auto palette = make_256_palette_fixture();
+  const auto decoded = romulus::data::decode_caesar2_pl8_sprite_pair_multi(image, palette, true);
+  if (assert_true(decoded.ok(), "mixed support should still return deterministic report") != 0) {
+    return 1;
+  }
+
+  if (assert_true(!decoded.value->decode_supported, "invalid sprite should mark decode unsupported") != 0) {
+    return 1;
+  }
+
+  return assert_true(decoded.value->sprite_reports[2].composition_status == "decode_failed",
+                     "invalid sprite should report decode_failed status");
+}
+
+int test_multi_sprite_report_format_is_stable() {
+  const auto image = make_multi_sprite_fixture();
+  const auto palette = make_256_palette_fixture();
+  const auto decoded = romulus::data::decode_caesar2_pl8_sprite_pair_multi(image, palette, true);
+  if (assert_true(decoded.ok(), "multi decode should succeed for report") != 0) {
+    return 1;
+  }
+
+  const auto report = romulus::data::format_pl8_sprite_pair_multi_report(decoded.value.value());
+  if (assert_true(report.find("sprite_decode_supported: yes") != std::string::npos,
+                  "report should include decode support field") != 0) {
+    return 1;
+  }
+  if (assert_true(report.find("composed_bounds: min=(0,0) max=(4,3)") != std::string::npos,
+                  "report should include composed bounds") != 0) {
+    return 1;
+  }
+  return assert_true(report.find("sprite[1]: decode=supported_type0, compose=composed") != std::string::npos,
+                     "report should include per-sprite decode/composition status");
+}
+
 }  // namespace
 
 int main() {
@@ -188,6 +332,11 @@ int main() {
   rc |= test_decode_fails_for_rle_flag();
   rc |= test_report_format_is_stable();
   rc |= test_sprite_pair_decode_with_256_palette_success();
+  rc |= test_multi_sprite_decode_and_compose_success();
+  rc |= test_multi_sprite_composition_order_is_deterministic();
+  rc |= test_multi_sprite_index_zero_transparency();
+  rc |= test_multi_sprite_invalid_offset_fails();
+  rc |= test_multi_sprite_report_format_is_stable();
 
   if (rc == 0) {
     std::cout << "pl8_sprite_table_resource_tests: all tests passed\n";
