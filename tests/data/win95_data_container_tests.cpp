@@ -183,6 +183,32 @@ std::vector<std::uint8_t> make_pack_with_malformed_ilbm_fixture() {
   return bytes;
 }
 
+std::vector<std::uint8_t> make_pack_with_ilbm_batch_fixture() {
+  const auto valid_ilbm = make_fixture_ilbm_payload();
+  const std::vector<std::uint8_t> malformed_ilbm = {'F', 'O', 'R', 'M', 0x00, 0x00, 0x00, 0x04, 'B', 'A', 'D', '!'};
+  const std::vector<std::uint8_t> opaque_payload = {0xDE, 0xAD, 0xBE, 0xEF};
+  std::vector<std::uint8_t> bytes;
+  bytes.insert(bytes.end(), {'P', 'A', 'C', 'K'});
+  append_u32_le(bytes, 3);
+
+  const std::uint32_t table_end = 8 + (3 * 8);
+  const std::uint32_t entry0_offset = table_end;
+  const std::uint32_t entry1_offset = entry0_offset + static_cast<std::uint32_t>(valid_ilbm.size());
+  const std::uint32_t entry2_offset = entry1_offset + static_cast<std::uint32_t>(malformed_ilbm.size());
+
+  append_u32_le(bytes, entry0_offset);
+  append_u32_le(bytes, static_cast<std::uint32_t>(valid_ilbm.size()));
+  append_u32_le(bytes, entry1_offset);
+  append_u32_le(bytes, static_cast<std::uint32_t>(malformed_ilbm.size()));
+  append_u32_le(bytes, entry2_offset);
+  append_u32_le(bytes, static_cast<std::uint32_t>(opaque_payload.size()));
+
+  bytes.insert(bytes.end(), valid_ilbm.begin(), valid_ilbm.end());
+  bytes.insert(bytes.end(), malformed_ilbm.begin(), malformed_ilbm.end());
+  bytes.insert(bytes.end(), opaque_payload.begin(), opaque_payload.end());
+  return bytes;
+}
+
 int test_parse_valid_pack_container() {
   const auto bytes = make_valid_pack_fixture();
   const auto parsed = romulus::data::parse_win95_pack_container(bytes);
@@ -466,6 +492,101 @@ int test_extract_pack_ilbm_entry_rejects_malformed_ilbm_payload() {
                      "malformed ILBM should return explicit validation failure");
 }
 
+int test_batch_analyzes_only_possible_ilbm_entries() {
+  const auto bytes = make_pack_with_ilbm_batch_fixture();
+  const auto parsed = romulus::data::parse_win95_pack_container(bytes);
+  if (assert_true(parsed.ok(), "batch analysis test requires valid PACK parse") != 0) {
+    return 1;
+  }
+
+  const auto batch = romulus::data::analyze_win95_pack_ilbm_batch(bytes, parsed.value.value());
+  if (assert_true(batch.total_entry_count == 3, "batch summary should include total entry count") != 0) {
+    return 1;
+  }
+  if (assert_true(batch.candidate_entry_count == 2, "batch should only analyze possible-ilbm entries") != 0) {
+    return 1;
+  }
+  if (assert_true(batch.parsed_entry_count == 1, "batch should count successful ILBM parses") != 0) {
+    return 1;
+  }
+  if (assert_true(batch.failed_entry_count == 1, "batch should count failed ILBM parses") != 0) {
+    return 1;
+  }
+  if (assert_true(batch.entry_results.size() == 2, "batch results should only include candidate entries") != 0) {
+    return 1;
+  }
+  if (assert_true(batch.entry_results[0].entry_index == 0 && batch.entry_results[1].entry_index == 1,
+                  "batch result ordering should follow deterministic entry index order") != 0) {
+    return 1;
+  }
+  if (assert_true(batch.entry_results[0].parse_success, "first candidate should parse successfully") != 0) {
+    return 1;
+  }
+  if (assert_true(batch.entry_results[0].width == 2 && batch.entry_results[0].height == 2,
+                  "successful parse should include compact ILBM dimensions") != 0) {
+    return 1;
+  }
+  if (assert_true(!batch.entry_results[1].parse_success, "malformed candidate should fail parsing") != 0) {
+    return 1;
+  }
+  if (assert_true(batch.entry_results[1].failure_reason.has_value(), "failed entry should include compact reason") != 0) {
+    return 1;
+  }
+  if (assert_true(batch.failure_reason_frequencies.size() == 1,
+                  "failure summary should group deterministic reason frequencies") != 0) {
+    return 1;
+  }
+  return assert_true(batch.failure_reason_frequencies[0].count == 1,
+                     "failure summary count should match failed candidate count");
+}
+
+int test_batch_report_formatting_and_preview_bounds() {
+  const auto bytes = make_pack_with_ilbm_batch_fixture();
+  const auto parsed = romulus::data::parse_win95_pack_container(bytes);
+  if (assert_true(parsed.ok(), "batch report test requires valid PACK parse") != 0) {
+    return 1;
+  }
+
+  const auto batch = romulus::data::analyze_win95_pack_ilbm_batch(bytes, parsed.value.value());
+  const auto compact_report = romulus::data::format_win95_pack_ilbm_batch_report(
+      batch,
+      "DATA",
+      romulus::data::Win95PackIlbmBatchReportOptions{
+          .preview_entry_limit = 1,
+          .include_all_entries = false,
+      });
+  if (assert_true(compact_report.find("# Caesar II Win95 PACK ILBM Batch Report") != std::string::npos,
+                  "batch report should include stable title") != 0) {
+    return 1;
+  }
+  if (assert_true(compact_report.find("possible_ilbm_entries: 2") != std::string::npos,
+                  "batch report should include candidate summary") != 0) {
+    return 1;
+  }
+  if (assert_true(compact_report.find("ilbm_entries_preview: showing 1 of 2") != std::string::npos,
+                  "batch report should honor preview limit") != 0) {
+    return 1;
+  }
+  if (assert_true(compact_report.find("ilbm_entries_preview_truncated: yes") != std::string::npos,
+                  "bounded report should declare truncation when preview is capped") != 0) {
+    return 1;
+  }
+
+  const auto detailed_report = romulus::data::format_win95_pack_ilbm_batch_report(
+      batch,
+      "DATA",
+      romulus::data::Win95PackIlbmBatchReportOptions{
+          .preview_entry_limit = 1,
+          .include_all_entries = true,
+      });
+  if (assert_true(detailed_report.find("ilbm_entries_preview: showing 2 of 2") != std::string::npos,
+                  "detailed report should include all candidate entries") != 0) {
+    return 1;
+  }
+  return assert_true(detailed_report.find("ilbm_entries_preview_truncated: yes") == std::string::npos,
+                     "detailed report should avoid truncation marker");
+}
+
 }  // namespace
 
 int main() {
@@ -518,6 +639,14 @@ int main() {
   }
 
   if (test_extract_pack_ilbm_entry_rejects_malformed_ilbm_payload() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_batch_analyzes_only_possible_ilbm_entries() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_batch_report_formatting_and_preview_bounds() != 0) {
     return EXIT_FAILURE;
   }
 

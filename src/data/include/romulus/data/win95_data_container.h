@@ -67,7 +67,33 @@ struct Win95PackIlbmExtraction {
   IlbmImageResource ilbm;
 };
 
+struct Win95PackIlbmBatchEntryResult {
+  std::size_t entry_index = 0;
+  std::size_t offset = 0;
+  std::size_t size = 0;
+  std::string classification_hint;
+  bool parse_success = false;
+  std::optional<std::string> failure_reason;
+  std::optional<std::size_t> width;
+  std::optional<std::size_t> height;
+  std::optional<std::size_t> palette_color_count;
+};
+
+struct Win95PackIlbmBatchResult {
+  std::size_t total_entry_count = 0;
+  std::size_t candidate_entry_count = 0;
+  std::size_t parsed_entry_count = 0;
+  std::size_t failed_entry_count = 0;
+  std::vector<Win95PackIlbmBatchEntryResult> entry_results;
+  std::vector<Win95PackMagicFrequency> failure_reason_frequencies;
+};
+
 struct Win95PackReportOptions {
+  std::size_t preview_entry_limit = 8;
+  bool include_all_entries = false;
+};
+
+struct Win95PackIlbmBatchReportOptions {
   std::size_t preview_entry_limit = 8;
   bool include_all_entries = false;
 };
@@ -100,6 +126,12 @@ constexpr std::size_t k_default_win95_container_max_file_load_bytes = 64 * 1024 
     const Win95PackContainerResource& container,
     std::size_t entry_index);
 
+[[nodiscard]] Win95PackIlbmBatchResult analyze_win95_pack_ilbm_batch(std::span<const std::byte> container_bytes,
+                                                                      const Win95PackContainerResource& container);
+[[nodiscard]] Win95PackIlbmBatchResult analyze_win95_pack_ilbm_batch(
+    std::span<const std::uint8_t> container_bytes,
+    const Win95PackContainerResource& container);
+
 [[nodiscard]] ProbeWin95DataContainerResult probe_win95_data_container_file(
     const std::filesystem::path& data_root,
     const std::string& candidate_path,
@@ -108,5 +140,9 @@ constexpr std::size_t k_default_win95_container_max_file_load_bytes = 64 * 1024 
 [[nodiscard]] std::string format_win95_data_container_report(const Win95PackContainerResource& resource,
                                                              std::string_view source_label = "",
                                                              Win95PackReportOptions options = {});
+[[nodiscard]] std::string format_win95_pack_ilbm_batch_report(
+    const Win95PackIlbmBatchResult& result,
+    std::string_view source_label = "",
+    Win95PackIlbmBatchReportOptions options = {});
 
 }  // namespace romulus::data

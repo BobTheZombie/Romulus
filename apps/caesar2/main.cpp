@@ -54,6 +54,8 @@ struct ParsedArguments {
   bool probe_win95_container_entries_all = false;
   std::optional<std::string> probe_pack_ilbm_container_file;
   std::optional<std::size_t> probe_pack_ilbm_entry_index;
+  std::optional<std::string> probe_pack_ilbm_batch_container_file;
+  bool probe_pack_ilbm_batch_entries_all = false;
   std::optional<std::string> extract_pack_ilbm_container_file;
   std::optional<std::size_t> extract_pack_ilbm_entry_index;
   std::optional<std::string> view_pack_ilbm_container_file;
@@ -317,6 +319,21 @@ struct ParsedArguments {
       continue;
     }
 
+    if (argument == "--probe-pack-ilbm-batch") {
+      if (index + 1 >= argc) {
+        romulus::core::log_error("--probe-pack-ilbm-batch requires <container>.");
+        return std::nullopt;
+      }
+
+      parsed.probe_pack_ilbm_batch_container_file = argv[++index];
+      continue;
+    }
+
+    if (argument == "--probe-pack-ilbm-batch-entries-all") {
+      parsed.probe_pack_ilbm_batch_entries_all = true;
+      continue;
+    }
+
     if (argument == "--extract-pack-ilbm") {
       if (index + 2 >= argc) {
         romulus::core::log_error("--extract-pack-ilbm requires <container> <entry_index>.");
@@ -538,12 +555,15 @@ struct ParsedArguments {
   }
 
   const bool has_pack_ilbm_probe = parsed.probe_pack_ilbm_container_file.has_value();
+  const bool has_pack_ilbm_batch_probe = parsed.probe_pack_ilbm_batch_container_file.has_value();
   const bool has_pack_ilbm_extract = parsed.extract_pack_ilbm_container_file.has_value();
   const bool has_pack_ilbm_view = parsed.view_pack_ilbm_container_file.has_value();
-  const int pack_ilbm_mode_count = static_cast<int>(has_pack_ilbm_probe) + static_cast<int>(has_pack_ilbm_extract) +
+  const int pack_ilbm_mode_count = static_cast<int>(has_pack_ilbm_probe) + static_cast<int>(has_pack_ilbm_batch_probe) +
+                                   static_cast<int>(has_pack_ilbm_extract) +
                                    static_cast<int>(has_pack_ilbm_view);
   if (pack_ilbm_mode_count > 1) {
-    romulus::core::log_error("--probe-pack-ilbm, --extract-pack-ilbm, and --view-pack-ilbm are mutually exclusive.");
+    romulus::core::log_error(
+        "--probe-pack-ilbm, --probe-pack-ilbm-batch, --extract-pack-ilbm, and --view-pack-ilbm are mutually exclusive.");
     return std::nullopt;
   }
 
@@ -554,7 +574,12 @@ struct ParsedArguments {
     return std::nullopt;
   }
 
-  if (has_pack_ilbm_probe || has_pack_ilbm_extract || has_pack_ilbm_view) {
+  if (parsed.probe_pack_ilbm_batch_entries_all && !has_pack_ilbm_batch_probe) {
+    romulus::core::log_error("--probe-pack-ilbm-batch-entries-all requires --probe-pack-ilbm-batch.");
+    return std::nullopt;
+  }
+
+  if (has_pack_ilbm_probe || has_pack_ilbm_batch_probe || has_pack_ilbm_extract || has_pack_ilbm_view) {
     const bool has_other_mode = parsed.inventory_manifest || parsed.probe_file.has_value() ||
                                 !parsed.probe_candidates.empty() || parsed.match_signature.has_value() ||
                                 !parsed.classify_candidates.empty() || parsed.export_tile_file.has_value() ||
@@ -988,6 +1013,35 @@ int run_pack_ilbm_probe(const std::filesystem::path& data_root,
   return 0;
 }
 
+int run_pack_ilbm_batch_probe(const std::filesystem::path& data_root,
+                              const std::string& container_file_arg,
+                              const bool include_all_entries) {
+  const auto container_path = resolve_data_relative(data_root, container_file_arg);
+  const auto loaded = romulus::data::load_file_to_memory(container_path);
+  if (!loaded.ok()) {
+    romulus::core::log_error(loaded.error.value().message);
+    return 1;
+  }
+
+  const auto parsed_container = romulus::data::parse_win95_pack_container(loaded.value.value().bytes);
+  if (!parsed_container.ok()) {
+    romulus::core::log_error(parsed_container.error.value().message);
+    return 1;
+  }
+
+  const auto batch_result = romulus::data::analyze_win95_pack_ilbm_batch(
+      loaded.value.value().bytes,
+      parsed_container.value.value());
+  std::cout << romulus::data::format_win95_pack_ilbm_batch_report(
+      batch_result,
+      container_file_arg,
+      romulus::data::Win95PackIlbmBatchReportOptions{
+          .preview_entry_limit = 8,
+          .include_all_entries = include_all_entries,
+      });
+  return 0;
+}
+
 int run_pack_ilbm_export(const std::filesystem::path& data_root,
                          const std::string& container_file_arg,
                          const std::size_t entry_index,
@@ -1053,6 +1107,8 @@ int main(int argc, char* argv[]) {
         "[--probe-win95-container <path>] "
         "[--probe-win95-container-entries-all] "
         "[--probe-pack-ilbm <container> <entry_index>] "
+        "[--probe-pack-ilbm-batch <container>] "
+        "[--probe-pack-ilbm-batch-entries-all] "
         "[--extract-pack-ilbm <container> <entry_index> --export-output <path>] "
         "[--view-pack-ilbm <container> <entry_index>] "
         "[--export-lbm-file <path> --export-output <path>] "
@@ -1083,6 +1139,7 @@ int main(int argc, char* argv[]) {
                                          parsed->probe_exe_resource_payloads_file.has_value() ||
                                          parsed->probe_win95_data || parsed->probe_win95_container_file.has_value() ||
                                          parsed->probe_pack_ilbm_container_file.has_value() ||
+                                         parsed->probe_pack_ilbm_batch_container_file.has_value() ||
                                          parsed->extract_pack_ilbm_container_file.has_value() ||
                                          parsed->view_pack_ilbm_container_file.has_value() ||
                                          parsed->export_lbm_file.has_value() || parsed->view_lbm_file.has_value() ||
@@ -1137,6 +1194,12 @@ int main(int argc, char* argv[]) {
     return run_pack_ilbm_probe(data_root,
                                parsed->probe_pack_ilbm_container_file.value(),
                                parsed->probe_pack_ilbm_entry_index.value());
+  }
+
+  if (parsed->probe_pack_ilbm_batch_container_file.has_value()) {
+    return run_pack_ilbm_batch_probe(data_root,
+                                     parsed->probe_pack_ilbm_batch_container_file.value(),
+                                     parsed->probe_pack_ilbm_batch_entries_all);
   }
 
   if (parsed->extract_pack_ilbm_container_file.has_value()) {
