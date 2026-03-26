@@ -62,6 +62,10 @@ add_executable(romulus_pl8_resource_tests data/pl8_resource_tests.cpp)
 target_link_libraries(romulus_pl8_resource_tests PRIVATE romulus::data)
 add_test(NAME romulus_pl8_resource_tests COMMAND romulus_pl8_resource_tests)
 
+add_executable(romulus_pl8_image_resource_tests data/pl8_image_resource_tests.cpp)
+target_link_libraries(romulus_pl8_image_resource_tests PRIVATE romulus::data)
+add_test(NAME romulus_pl8_image_resource_tests COMMAND romulus_pl8_image_resource_tests)
+
 add_executable(romulus_image256_resource_tests data/image256_resource_tests.cpp)
 target_link_libraries(romulus_image256_resource_tests PRIVATE romulus::data)
 add_test(NAME romulus_image256_resource_tests COMMAND romulus_image256_resource_tests)

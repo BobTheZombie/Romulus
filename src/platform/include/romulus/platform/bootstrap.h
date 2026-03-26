@@ -14,16 +14,16 @@ struct BootstrapAssetSelection {
 };
 
 struct ForumOverlayAssetSelection {
-  std::filesystem::path image256_logical_path;
-  std::filesystem::path image256_absolute_path;
-  std::filesystem::path palette_pl8_logical_path;
-  std::filesystem::path palette_pl8_absolute_path;
+  std::filesystem::path image_pl8_logical_path;
+  std::filesystem::path image_pl8_absolute_path;
+  std::filesystem::path palette_256_logical_path;
+  std::filesystem::path palette_256_absolute_path;
   bool case_insensitive_resolution_attempted = false;
 };
 
 struct ForumOverlayAssetSpec {
-  std::filesystem::path image256_path;
-  std::filesystem::path palette_pl8_path;
+  std::filesystem::path image_pl8_path;
+  std::filesystem::path palette_256_path;
 };
 
 [[nodiscard]] std::vector<std::filesystem::path> default_bootstrap_asset_candidates();

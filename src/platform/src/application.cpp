@@ -15,6 +15,7 @@
 #include "romulus/data/file_loader.h"
 #include "romulus/data/image256_resource.h"
 #include "romulus/data/ilbm_image.h"
+#include "romulus/data/pl8_image_resource.h"
 #include "romulus/platform/bootstrap.h"
 #include "romulus/platform/viewer.h"
 
@@ -128,52 +129,43 @@ void blend_rgba_layers(romulus::data::RgbaImage* destination, const romulus::dat
 
   romulus::data::RgbaImage composed = decoded_background.value.value();
   for (const auto& overlay_spec : default_forum_overlay_specs()) {
-    romulus::core::log_info("Forum compose overlay resolving: image='" + overlay_spec.image256_path.string() +
-                            "', palette='" + overlay_spec.palette_pl8_path.string() + "'");
+    romulus::core::log_info("Forum compose overlay resolving: image='" + overlay_spec.image_pl8_path.string() +
+                            "', palette='" + overlay_spec.palette_256_path.string() + "'");
     const auto selection = select_forum_overlay_asset(data_root, overlay_spec);
     if (!selection.has_value()) {
       romulus::core::log_warning("Forum compose overlay skipped: unable to resolve required files for image='" +
-                                 overlay_spec.image256_path.string() + "', palette='" +
-                                 overlay_spec.palette_pl8_path.string() + "'");
+                                 overlay_spec.image_pl8_path.string() + "', palette='" +
+                                 overlay_spec.palette_256_path.string() + "'");
       continue;
     }
 
-    const auto dimensions = romulus::data::resolve_known_win95_256_dimensions(selection->image256_logical_path);
-    if (!dimensions.has_value()) {
-      romulus::core::log_warning("Forum compose overlay skipped: no known dimensions for image='" +
-                                 selection->image256_logical_path.string() + "'");
-      continue;
-    }
-
-    const auto loaded_image = romulus::data::load_file_to_memory(selection->image256_absolute_path);
+    const auto loaded_image = romulus::data::load_file_to_memory(selection->image_pl8_absolute_path);
     if (!loaded_image.ok()) {
       romulus::core::log_warning("Forum compose overlay skipped: failed to load image='" +
-                                 selection->image256_logical_path.string() + "' reason='" +
+                                 selection->image_pl8_logical_path.string() + "' reason='" +
                                  loaded_image.error->message + "'");
       continue;
     }
 
-    const auto loaded_palette = romulus::data::load_file_to_memory(selection->palette_pl8_absolute_path);
+    const auto loaded_palette = romulus::data::load_file_to_memory(selection->palette_256_absolute_path);
     if (!loaded_palette.ok()) {
       romulus::core::log_warning("Forum compose overlay skipped: failed to load palette='" +
-                                 selection->palette_pl8_logical_path.string() + "' reason='" +
+                                 selection->palette_256_logical_path.string() + "' reason='" +
                                  loaded_palette.error->message + "'");
       continue;
     }
 
-    romulus::core::log_info("Forum compose overlay loaded: image='" + selection->image256_logical_path.string() +
+    romulus::core::log_info("Forum compose overlay loaded: image='" + selection->image_pl8_logical_path.string() +
                             "' bytes=" + std::to_string(loaded_image.value->bytes.size()) + ", palette='" +
-                            selection->palette_pl8_logical_path.string() +
+                            selection->palette_256_logical_path.string() +
                             "' bytes=" + std::to_string(loaded_palette.value->bytes.size()));
 
-    const auto decoded_overlay = romulus::data::decode_caesar2_win95_256_pl8_pair(loaded_image.value->bytes,
-                                                                                    loaded_palette.value->bytes,
-                                                                                    dimensions->first,
-                                                                                    dimensions->second,
-                                                                                    true);
+    const auto decoded_overlay = romulus::data::decode_caesar2_forum_pl8_image_pair(loaded_image.value->bytes,
+                                                                                     loaded_palette.value->bytes,
+                                                                                     true);
     if (!decoded_overlay.ok()) {
       romulus::core::log_warning("Forum compose overlay skipped: decode failed for image='" +
-                                 selection->image256_logical_path.string() + "' reason='" +
+                                 selection->image_pl8_logical_path.string() + "' reason='" +
                                  decoded_overlay.error->message + "'");
       continue;
     }
@@ -181,7 +173,7 @@ void blend_rgba_layers(romulus::data::RgbaImage* destination, const romulus::dat
     if (decoded_overlay.value->rgba_image.width != composed.width ||
         decoded_overlay.value->rgba_image.height != composed.height) {
       romulus::core::log_warning("Forum compose overlay skipped: size mismatch image='" +
-                                 selection->image256_logical_path.string() + "' decoded=" +
+                                 selection->image_pl8_logical_path.string() + "' decoded=" +
                                  std::to_string(decoded_overlay.value->rgba_image.width) + "x" +
                                  std::to_string(decoded_overlay.value->rgba_image.height) + " background=" +
                                  std::to_string(composed.width) + "x" + std::to_string(composed.height));
@@ -189,8 +181,8 @@ void blend_rgba_layers(romulus::data::RgbaImage* destination, const romulus::dat
     }
 
     blend_rgba_layers(&composed, decoded_overlay.value->rgba_image);
-    romulus::core::log_info("Forum compose overlay composed: image='" + selection->image256_logical_path.string() +
-                            "', palette='" + selection->palette_pl8_logical_path.string() + "'");
+    romulus::core::log_info("Forum compose overlay composed: image='" + selection->image_pl8_logical_path.string() +
+                            "', palette='" + selection->palette_256_logical_path.string() + "'");
   }
 
   return composed;

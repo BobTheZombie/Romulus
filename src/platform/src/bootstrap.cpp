@@ -71,10 +71,10 @@ std::filesystem::path forum_background_logical_path() {
 
 std::vector<ForumOverlayAssetSpec> default_forum_overlay_specs() {
   return {
-      {.image256_path = std::filesystem::path("data0") / "forum.256",
-       .palette_pl8_path = std::filesystem::path("data0") / "forum.pl8"},
-      {.image256_path = std::filesystem::path("data0") / "rat_back.256",
-       .palette_pl8_path = std::filesystem::path("data0") / "rat_back.pl8"},
+      {.image_pl8_path = std::filesystem::path("data0") / "forum.pl8",
+       .palette_256_path = std::filesystem::path("data0") / "forum.256"},
+      {.image_pl8_path = std::filesystem::path("data0") / "rat_back.pl8",
+       .palette_256_path = std::filesystem::path("data0") / "rat_back.256"},
   };
 }
 
@@ -84,21 +84,21 @@ std::optional<BootstrapAssetSelection> select_forum_background_asset(const std::
 
 std::optional<ForumOverlayAssetSelection> select_forum_overlay_asset(const std::filesystem::path& data_root,
                                                                      const ForumOverlayAssetSpec& spec) {
-  const auto image_selection = resolve_candidate(data_root, spec.image256_path, false);
+  const auto image_selection = resolve_candidate(data_root, spec.image_pl8_path, false);
   if (!image_selection.has_value()) {
     return std::nullopt;
   }
 
-  const auto palette_selection = resolve_candidate(data_root, spec.palette_pl8_path, false);
+  const auto palette_selection = resolve_candidate(data_root, spec.palette_256_path, false);
   if (!palette_selection.has_value()) {
     return std::nullopt;
   }
 
   ForumOverlayAssetSelection selection;
-  selection.image256_logical_path = spec.image256_path;
-  selection.image256_absolute_path = image_selection->absolute_path;
-  selection.palette_pl8_logical_path = spec.palette_pl8_path;
-  selection.palette_pl8_absolute_path = palette_selection->absolute_path;
+  selection.image_pl8_logical_path = spec.image_pl8_path;
+  selection.image_pl8_absolute_path = image_selection->absolute_path;
+  selection.palette_256_logical_path = spec.palette_256_path;
+  selection.palette_256_absolute_path = palette_selection->absolute_path;
   selection.case_insensitive_resolution_attempted = image_selection->case_insensitive_resolution_attempted ||
                                                     palette_selection->case_insensitive_resolution_attempted;
   return selection;
