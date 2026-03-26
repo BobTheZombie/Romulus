@@ -15,11 +15,9 @@ namespace romulus::data {
 
 struct Pl8ImageResource {
   static constexpr std::size_t kHeaderSize = 24;
-  static constexpr std::uint16_t kSupportedWidth = 640;
-  static constexpr std::uint16_t kSupportedHeight = 480;
-  static constexpr std::size_t kSupportedPayloadSize =
-      static_cast<std::size_t>(kSupportedWidth) * static_cast<std::size_t>(kSupportedHeight);
-  static constexpr std::size_t kSupportedFileSize = kHeaderSize + kSupportedPayloadSize;
+  static constexpr std::size_t kDimensionsOffset = 8;
+  static constexpr std::uint16_t kMinSupportedDimension = 1;
+  static constexpr std::uint16_t kMaxSupportedDimension = 4096;
 
   std::size_t header_size = 0;
   std::size_t payload_offset = 0;

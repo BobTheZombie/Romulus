@@ -23,16 +23,16 @@ ParseResult<Pl8ImageResource> parse_caesar2_forum_pl8_image(std::span<const std:
   }
 
   BinaryReader reader(bytes);
-  if (const auto seek_prefix_error = reader.seek(8); seek_prefix_error.has_value()) {
+  if (const auto seek_prefix_error = reader.seek(Pl8ImageResource::kDimensionsOffset); seek_prefix_error.has_value()) {
     return {.error = seek_prefix_error};
   }
 
-  const auto width_raw = reader.read_u32_le();
+  const auto width_raw = reader.read_u16_le();
   if (!width_raw.ok()) {
     return {.error = width_raw.error};
   }
 
-  const auto height_raw = reader.read_u32_le();
+  const auto height_raw = reader.read_u16_le();
   if (!height_raw.ok()) {
     return {.error = height_raw.error};
   }
@@ -43,10 +43,12 @@ ParseResult<Pl8ImageResource> parse_caesar2_forum_pl8_image(std::span<const std:
 
   const auto width = width_raw.value.value();
   const auto height = height_raw.value.value();
-  if (width != Pl8ImageResource::kSupportedWidth || height != Pl8ImageResource::kSupportedHeight) {
+  if (width < Pl8ImageResource::kMinSupportedDimension || height < Pl8ImageResource::kMinSupportedDimension ||
+      width > Pl8ImageResource::kMaxSupportedDimension || height > Pl8ImageResource::kMaxSupportedDimension) {
     std::ostringstream message;
-    message << "Unsupported FORUM-style PL8 image layout: header dimensions=" << width << "x" << height
-            << " expected=" << Pl8ImageResource::kSupportedWidth << "x" << Pl8ImageResource::kSupportedHeight;
+    message << "Unsupported FORUM-style PL8 image layout: dimensions out of supported bounds (" << width << "x"
+            << height << "), allowed range=[" << Pl8ImageResource::kMinSupportedDimension << ".."
+            << Pl8ImageResource::kMaxSupportedDimension << "]";
     return {.error = make_invalid_pl8_image_error(bytes.size(), bytes.size(), message.str())};
   }
 
@@ -132,6 +134,9 @@ std::string format_pl8_image_report(const Pl8ImageResource& image, const std::si
   output << "width: " << image.width << "\n";
   output << "height: " << image.height << "\n";
   output << "payload_size: " << image.payload_size << "\n";
+  output << "payload_expected_from_dimensions: " << (static_cast<std::size_t>(image.width) * image.height) << "\n";
+  output << "payload_matches_dimensions: "
+         << (image.payload_size == (static_cast<std::size_t>(image.width) * image.height) ? "yes" : "no") << "\n";
 
   const auto count = std::min(max_pixels, image.indexed_pixels.size());
   output << "pixels:";
