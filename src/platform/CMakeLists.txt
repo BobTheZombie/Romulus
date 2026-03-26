@@ -1,4 +1,4 @@
-add_library(romulus_platform src/application.cpp src/bootstrap.cpp src/viewer.cpp src/startup.cpp)
+add_library(romulus_platform src/application.cpp src/bootstrap.cpp src/viewer.cpp src/startup.cpp src/forum_composition.cpp)
 add_library(romulus::platform ALIAS romulus_platform)
 
 target_include_directories(

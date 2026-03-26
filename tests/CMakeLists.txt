@@ -50,6 +50,10 @@ add_executable(romulus_bootstrap_tests platform/bootstrap_tests.cpp)
 target_link_libraries(romulus_bootstrap_tests PRIVATE romulus::platform)
 add_test(NAME romulus_bootstrap_tests COMMAND romulus_bootstrap_tests)
 
+add_executable(romulus_forum_composition_tests platform/forum_composition_tests.cpp)
+target_link_libraries(romulus_forum_composition_tests PRIVATE romulus::platform)
+add_test(NAME romulus_forum_composition_tests COMMAND romulus_forum_composition_tests)
+
 add_executable(romulus_map_resource_tests data/map_resource_tests.cpp)
 target_link_libraries(romulus_map_resource_tests PRIVATE romulus::data)
 add_test(NAME romulus_map_resource_tests COMMAND romulus_map_resource_tests)
