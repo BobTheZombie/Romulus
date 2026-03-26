@@ -37,6 +37,22 @@ namespace {
   return left + right;
 }
 
+[[nodiscard]] std::string compact_failure_reason(std::string_view message) {
+  constexpr std::string_view kPrefix = "failed ILBM validation: ";
+  constexpr std::string_view kProbePrefix = "PACK entry ";
+  const auto validation_index = message.find(kPrefix);
+  if (validation_index != std::string_view::npos) {
+    return std::string(message.substr(validation_index + kPrefix.size()));
+  }
+
+  const auto colon_index = message.find(": ");
+  if (colon_index != std::string_view::npos && message.substr(0, kProbePrefix.size()) == kProbePrefix) {
+    return std::string(message.substr(colon_index + 2));
+  }
+
+  return std::string(message);
+}
+
 struct RangeCheck {
   std::size_t index = 0;
   std::size_t offset = 0;
@@ -396,6 +412,68 @@ ParseResult<Win95PackIlbmExtraction> extract_win95_pack_ilbm_entry(std::span<con
       entry_index);
 }
 
+Win95PackIlbmBatchResult analyze_win95_pack_ilbm_batch(std::span<const std::byte> container_bytes,
+                                                        const Win95PackContainerResource& container) {
+  Win95PackIlbmBatchResult result;
+  result.total_entry_count = container.entries.size();
+  std::map<std::string, std::size_t> failure_counts;
+
+  for (const auto& entry : container.entries) {
+    if (entry.classification_hint != "possible-ilbm") {
+      continue;
+    }
+
+    ++result.candidate_entry_count;
+    Win95PackIlbmBatchEntryResult entry_result{
+        .entry_index = entry.index,
+        .offset = entry.offset,
+        .size = entry.size,
+        .classification_hint = entry.classification_hint,
+    };
+
+    const auto extracted = extract_win95_pack_ilbm_entry(container_bytes, container, entry.index);
+    if (!extracted.ok()) {
+      ++result.failed_entry_count;
+      entry_result.parse_success = false;
+      const auto reason = compact_failure_reason(extracted.error->message);
+      entry_result.failure_reason = reason;
+      ++failure_counts[reason];
+      result.entry_results.push_back(std::move(entry_result));
+      continue;
+    }
+
+    ++result.parsed_entry_count;
+    entry_result.parse_success = true;
+    entry_result.width = extracted.value->ilbm.width;
+    entry_result.height = extracted.value->ilbm.height;
+    entry_result.palette_color_count = extracted.value->ilbm.palette.colors.size();
+    result.entry_results.push_back(std::move(entry_result));
+  }
+
+  result.failure_reason_frequencies.reserve(failure_counts.size());
+  for (const auto& [reason, count] : failure_counts) {
+    result.failure_reason_frequencies.push_back(Win95PackMagicFrequency{
+        .signature = reason,
+        .count = count,
+    });
+  }
+  std::stable_sort(result.failure_reason_frequencies.begin(), result.failure_reason_frequencies.end(), [](const auto& left, const auto& right) {
+    if (left.count != right.count) {
+      return left.count > right.count;
+    }
+    return left.signature < right.signature;
+  });
+
+  return result;
+}
+
+Win95PackIlbmBatchResult analyze_win95_pack_ilbm_batch(std::span<const std::uint8_t> container_bytes,
+                                                        const Win95PackContainerResource& container) {
+  return analyze_win95_pack_ilbm_batch(
+      std::span<const std::byte>(reinterpret_cast<const std::byte*>(container_bytes.data()), container_bytes.size()),
+      container);
+}
+
 ProbeWin95DataContainerResult probe_win95_data_container_file(const std::filesystem::path& data_root,
                                                               const std::string& candidate_path,
                                                               const std::size_t max_file_load_bytes) {
@@ -459,6 +537,58 @@ std::string format_win95_data_container_report(const Win95PackContainerResource&
 
   if (entry_limit < resource.entries.size()) {
     output << "entries_preview_truncated: yes\n";
+  }
+
+  return output.str();
+}
+
+std::string format_win95_pack_ilbm_batch_report(const Win95PackIlbmBatchResult& result,
+                                                 std::string_view source_label,
+                                                 const Win95PackIlbmBatchReportOptions options) {
+  std::ostringstream output;
+  output << "# Caesar II Win95 PACK ILBM Batch Report\n";
+  if (!source_label.empty()) {
+    output << "source: " << source_label << "\n";
+  }
+
+  output << "total_entries: " << result.total_entry_count << "\n";
+  output << "possible_ilbm_entries: " << result.candidate_entry_count << "\n";
+  output << "parsed_ilbm_entries: " << result.parsed_entry_count << "\n";
+  output << "failed_ilbm_entries: " << result.failed_entry_count << "\n";
+
+  output << "failure_reasons:\n";
+  if (result.failure_reason_frequencies.empty()) {
+    output << "  - (none)\n";
+  } else {
+    for (const auto& frequency : result.failure_reason_frequencies) {
+      output << "  - reason: " << frequency.signature << " count=" << frequency.count << "\n";
+    }
+  }
+
+  const auto entry_limit = options.include_all_entries
+                               ? result.entry_results.size()
+                               : std::min<std::size_t>(options.preview_entry_limit, result.entry_results.size());
+  output << "ilbm_entries_preview: showing " << entry_limit << " of " << result.entry_results.size() << "\n";
+  for (std::size_t index = 0; index < entry_limit; ++index) {
+    const auto& entry = result.entry_results[index];
+    output << "  - index: " << entry.entry_index
+           << " offset=" << entry.offset
+           << " size=" << entry.size
+           << " class=" << entry.classification_hint
+           << " status=" << (entry.parse_success ? "parsed" : "failed");
+    if (entry.parse_success) {
+      output << " width=" << entry.width.value_or(0)
+             << " height=" << entry.height.value_or(0)
+             << " palette_colors=" << entry.palette_color_count.value_or(0);
+    } else {
+      output << " reason=" << entry.failure_reason.value_or("unknown");
+    }
+
+    output << "\n";
+  }
+
+  if (entry_limit < result.entry_results.size()) {
+    output << "ilbm_entries_preview_truncated: yes\n";
   }
 
   return output.str();
