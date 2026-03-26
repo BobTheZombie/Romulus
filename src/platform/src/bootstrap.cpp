@@ -2,23 +2,42 @@
 
 #include <array>
 
+#include "romulus/data/path_resolver.h"
+
 namespace romulus::platform {
 namespace {
 
 [[nodiscard]] std::optional<BootstrapAssetSelection> resolve_candidate(const std::filesystem::path& data_root,
                                                                         const std::filesystem::path& candidate,
                                                                         const bool used_override) {
-  const auto resolved = candidate.is_absolute() ? candidate : (data_root / candidate);
-  std::error_code error;
-  if (!std::filesystem::is_regular_file(resolved, error) || error) {
+  BootstrapAssetSelection selection;
+  selection.logical_path = candidate;
+  selection.used_override = used_override;
+
+  if (candidate.is_absolute()) {
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(candidate, error) || error) {
+      return std::nullopt;
+    }
+
+    selection.absolute_path = candidate;
+    selection.case_insensitive_resolution_attempted = false;
+    return selection;
+  }
+
+  selection.case_insensitive_resolution_attempted = true;
+  const auto resolved = romulus::data::resolve_case_insensitive(data_root, candidate);
+  if (!resolved.has_value()) {
     return std::nullopt;
   }
 
-  return BootstrapAssetSelection{
-      .absolute_path = resolved,
-      .logical_path = candidate,
-      .used_override = used_override,
-  };
+  std::error_code error;
+  if (!std::filesystem::is_regular_file(*resolved, error) || error) {
+    return std::nullopt;
+  }
+
+  selection.absolute_path = *resolved;
+  return selection;
 }
 
 }  // namespace
