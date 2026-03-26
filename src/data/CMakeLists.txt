@@ -13,6 +13,7 @@ add_library(romulus_data
   src/ilbm_image.cpp
   src/pl8_resource.cpp
   src/pl8_image_resource.cpp
+  src/pl8_sprite_table_resource.cpp
   src/image256_resource.cpp
   src/pe_exe_resource.cpp
   src/win95_data_probe.cpp
