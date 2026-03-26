@@ -427,8 +427,18 @@ int test_probe_structured_pl8_regions_is_deterministic() {
     return 1;
   }
 
-  return assert_true(report.find("source: leading_u32_pairs") != std::string::npos,
-                     "regions report should include candidate source label");
+  if (assert_true(report.find("source: leading_u32_pairs") != std::string::npos,
+                  "regions report should include candidate source label") != 0) {
+    return 1;
+  }
+
+  if (assert_true(report.find("offset_length_pair_hints:") != std::string::npos,
+                  "regions report should include bounded offset/length pair hints") != 0) {
+    return 1;
+  }
+
+  return assert_true(report.find("size_classification: image_like_exact") != std::string::npos,
+                     "regions report should classify exact image-sized regions deterministically");
 }
 
 int test_probe_structured_pl8_regions_rejects_truncated_payload() {
