@@ -144,6 +144,92 @@ int test_smaller_sprite_bbox_yields_full_canvas_overlay() {
                      "sprite should appear at absolute coordinates on full canvas");
 }
 
+int test_destination_rect_calculation_by_mode_is_deterministic() {
+  const auto sprite = make_sprite(10, 20, 6, 4, 0, 0, 0);
+  const auto top_left = romulus::platform::compute_sprite_destination_rect(
+      sprite, romulus::platform::SpritePlacementMode::TopLeft);
+  const auto bottom_left = romulus::platform::compute_sprite_destination_rect(
+      sprite, romulus::platform::SpritePlacementMode::BottomLeft);
+  const auto centered = romulus::platform::compute_sprite_destination_rect(
+      sprite, romulus::platform::SpritePlacementMode::Centered);
+  const auto bottom_center = romulus::platform::compute_sprite_destination_rect(
+      sprite, romulus::platform::SpritePlacementMode::BottomCenter);
+
+  if (assert_true(top_left.x == 10 && top_left.y == 20, "top-left placement should preserve descriptor anchor") != 0) {
+    return 1;
+  }
+  if (assert_true(bottom_left.x == 10 && bottom_left.y == 16, "bottom-left placement should offset by height") != 0) {
+    return 1;
+  }
+  if (assert_true(centered.x == 7 && centered.y == 18, "centered placement should subtract half width/height") != 0) {
+    return 1;
+  }
+  return assert_true(bottom_center.x == 7 && bottom_center.y == 16,
+                     "bottom-center placement should subtract half width and full height");
+}
+
+int test_sprite_isolation_selection_behavior() {
+  romulus::platform::SpritePlacementOptions options;
+  if (assert_true(romulus::platform::sprite_is_visible_for_options(0, options),
+                  "all sprites should be visible when no isolation is configured") != 0) {
+    return 1;
+  }
+
+  options.isolated_sprite_index = 2;
+  if (assert_true(!romulus::platform::sprite_is_visible_for_options(1, options),
+                  "non-selected sprites should be hidden in isolate mode") != 0) {
+    return 1;
+  }
+  return assert_true(romulus::platform::sprite_is_visible_for_options(2, options),
+                     "selected sprite should remain visible in isolate mode");
+}
+
+int test_placement_report_formatting_is_stable() {
+  const auto sprite = make_sprite(3, 4, 5, 6, 0, 0, 0);
+  romulus::platform::SpritePlacementOptions options{
+      .placement_mode = romulus::platform::SpritePlacementMode::TopLeft,
+      .draw_order = romulus::platform::SpriteDrawOrder::Forward,
+      .isolated_sprite_index = std::nullopt,
+  };
+  std::vector<romulus::platform::SpritePlacementDebugEntry> entries{
+      {.sprite_index = sprite.sprite_index,
+       .width = sprite.sprite.width,
+       .height = sprite.sprite.height,
+       .descriptor_x = sprite.sprite.x,
+       .descriptor_y = sprite.sprite.y,
+       .tile_type = sprite.sprite.tile_type,
+       .destination_rect = romulus::platform::compute_sprite_destination_rect(
+           sprite, romulus::platform::SpritePlacementMode::TopLeft)}};
+
+  const auto report = romulus::platform::format_sprite_placement_report({sprite}, options, entries);
+  if (assert_true(report.find("sprite_placement_report: mode=top_left draw_order=forward isolate=all sprite_count=1") !=
+                      std::string::npos,
+                  "header should include deterministic placement metadata") != 0) {
+    return 1;
+  }
+  return assert_true(report.find("sprite[0]: w=5 h=6 x=3 y=4 tile_type=0 dest=(3,4,5x6)") != std::string::npos,
+                     "entry should include deterministic dimensions, descriptor, and destination rect");
+}
+
+int test_bounds_clipping_under_bottom_left_rule() {
+  romulus::platform::SpritePlacementOptions options{
+      .placement_mode = romulus::platform::SpritePlacementMode::BottomLeft,
+      .draw_order = romulus::platform::SpriteDrawOrder::Forward,
+      .isolated_sprite_index = std::nullopt,
+  };
+  const auto result = romulus::platform::compose_sprite_layer_to_canvas(
+      4, 4, {make_sprite(0, 1, 2, 2, 55, 0, 0)}, options);
+  if (assert_true(result.has_value(), "placement should succeed under bottom-left rule") != 0) {
+    return 1;
+  }
+  if (assert_true(result->stats.placed_sprites == 1 && result->stats.clipped_sprites == 1,
+                  "bottom-left rule should clip when transformed y crosses top bound") != 0) {
+    return 1;
+  }
+  return assert_true(pixel_channel(result->rgba_image, 0, 0, 0) == 55,
+                     "clipped bottom-left placement should retain in-bounds pixels");
+}
+
 }  // namespace
 
 int main() {
@@ -164,6 +250,18 @@ int main() {
   }
 
   if (test_smaller_sprite_bbox_yields_full_canvas_overlay() != 0) {
+    return EXIT_FAILURE;
+  }
+  if (test_destination_rect_calculation_by_mode_is_deterministic() != 0) {
+    return EXIT_FAILURE;
+  }
+  if (test_sprite_isolation_selection_behavior() != 0) {
+    return EXIT_FAILURE;
+  }
+  if (test_placement_report_formatting_is_stable() != 0) {
+    return EXIT_FAILURE;
+  }
+  if (test_bounds_clipping_under_bottom_left_rule() != 0) {
     return EXIT_FAILURE;
   }
 
