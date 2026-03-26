@@ -218,6 +218,9 @@ void blend_rgba_layers(romulus::data::RgbaImage* destination, const romulus::dat
                                 " clipped_sprites=" + std::to_string(placed_overlay->stats.clipped_sprites) +
                                 " skipped_out_of_bounds_sprites=" +
                                 std::to_string(placed_overlay->stats.skipped_out_of_bounds_sprites));
+        romulus::core::log_info(format_sprite_placement_report(sprite_overlay.value->decoded_sprites,
+                                                                {},
+                                                                placed_overlay->debug_entries));
       } else {
         std::string sprite_reason = "no_composition";
         if (!sprite_overlay.ok()) {
