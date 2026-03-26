@@ -1,13 +1,15 @@
 #include "romulus/platform/forum_composition.h"
 
 #include <algorithm>
+#include <cctype>
+#include <filesystem>
 #include <sstream>
 
 namespace romulus::platform {
 
 std::vector<SpritePlacementMode> sprite_placement_modes() {
   return {SpritePlacementMode::TopLeft, SpritePlacementMode::BottomLeft, SpritePlacementMode::Centered,
-          SpritePlacementMode::BottomCenter};
+          SpritePlacementMode::TopCenter, SpritePlacementMode::BottomCenter};
 }
 
 const char* sprite_placement_mode_name(const SpritePlacementMode mode) {
@@ -18,6 +20,8 @@ const char* sprite_placement_mode_name(const SpritePlacementMode mode) {
       return "bottom_left";
     case SpritePlacementMode::Centered:
       return "centered";
+    case SpritePlacementMode::TopCenter:
+      return "top_center";
     case SpritePlacementMode::BottomCenter:
       return "bottom_center";
   }
@@ -43,11 +47,33 @@ SpritePlacementRect compute_sprite_destination_rect(const romulus::data::Pl8Deco
       return {.x = x, .y = y - height, .width = width, .height = height};
     case SpritePlacementMode::Centered:
       return {.x = x - (width / 2), .y = y - (height / 2), .width = width, .height = height};
+    case SpritePlacementMode::TopCenter:
+      return {.x = x - (width / 2), .y = y, .width = width, .height = height};
     case SpritePlacementMode::BottomCenter:
       return {.x = x - (width / 2), .y = y - height, .width = width, .height = height};
   }
 
   return {.x = x, .y = y, .width = width, .height = height};
+}
+
+SpritePlacementMode resolve_sprite_placement_mode(const std::string& asset_name,
+                                                  const std::size_t sprite_index,
+                                                  const SpritePlacementMode fallback_mode) {
+  std::string normalized_file = std::filesystem::path(asset_name).filename().string();
+  std::transform(normalized_file.begin(), normalized_file.end(), normalized_file.begin(), [](const unsigned char c) {
+    return static_cast<char>(std::tolower(c));
+  });
+
+  if (normalized_file == "rat_back.pl8") {
+    if (sprite_index == 0) {
+      return SpritePlacementMode::TopCenter;
+    }
+    if (sprite_index == 1 || sprite_index == 2) {
+      return SpritePlacementMode::BottomCenter;
+    }
+  }
+
+  return fallback_mode;
 }
 
 bool sprite_is_visible_for_options(const std::size_t sprite_index, const SpritePlacementOptions& options) {
@@ -70,6 +96,7 @@ std::string format_sprite_placement_report(const std::vector<romulus::data::Pl8D
   for (const auto& entry : debug_entries) {
     out << "sprite[" << entry.sprite_index << "]: w=" << entry.width << " h=" << entry.height
         << " x=" << entry.descriptor_x << " y=" << entry.descriptor_y << " tile_type=" << entry.tile_type
+        << " mode=" << sprite_placement_mode_name(entry.resolved_mode)
         << " dest=(" << entry.destination_rect.x << "," << entry.destination_rect.y << ","
         << entry.destination_rect.width << "x" << entry.destination_rect.height << ")\n";
   }
@@ -81,7 +108,8 @@ std::optional<SpriteLayerPlacementResult> compose_sprite_layer_to_canvas(
     const std::uint16_t canvas_width,
     const std::uint16_t canvas_height,
     const std::vector<romulus::data::Pl8DecodedSprite>& decoded_sprites,
-    const SpritePlacementOptions& options) {
+    const SpritePlacementOptions& options,
+    const std::string& asset_name) {
   if (canvas_width == 0 || canvas_height == 0) {
     return std::nullopt;
   }
@@ -109,7 +137,8 @@ std::optional<SpriteLayerPlacementResult> compose_sprite_layer_to_canvas(
       continue;
     }
 
-    const auto destination_rect = compute_sprite_destination_rect(decoded, options.placement_mode);
+    const auto resolved_mode = resolve_sprite_placement_mode(asset_name, decoded.sprite_index, options.placement_mode);
+    const auto destination_rect = compute_sprite_destination_rect(decoded, resolved_mode);
     result.debug_entries.push_back({
         .sprite_index = decoded.sprite_index,
         .width = decoded.sprite.width,
@@ -117,6 +146,7 @@ std::optional<SpriteLayerPlacementResult> compose_sprite_layer_to_canvas(
         .descriptor_x = decoded.sprite.x,
         .descriptor_y = decoded.sprite.y,
         .tile_type = decoded.sprite.tile_type,
+        .resolved_mode = resolved_mode,
         .destination_rect = destination_rect,
     });
 

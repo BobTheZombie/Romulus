@@ -15,7 +15,8 @@ enum class SpritePlacementMode : std::uint8_t {
   TopLeft = 0,
   BottomLeft = 1,
   Centered = 2,
-  BottomCenter = 3,
+  TopCenter = 3,
+  BottomCenter = 4,
 };
 
 enum class SpriteDrawOrder : std::uint8_t {
@@ -43,6 +44,7 @@ struct SpritePlacementDebugEntry {
   std::int16_t descriptor_x = 0;
   std::int16_t descriptor_y = 0;
   std::uint16_t tile_type = 0;
+  SpritePlacementMode resolved_mode = SpritePlacementMode::TopLeft;
   SpritePlacementRect destination_rect;
 };
 
@@ -63,6 +65,9 @@ struct SpriteLayerPlacementResult {
 [[nodiscard]] const char* sprite_draw_order_name(SpriteDrawOrder order);
 [[nodiscard]] SpritePlacementRect compute_sprite_destination_rect(const romulus::data::Pl8DecodedSprite& decoded,
                                                                   SpritePlacementMode mode);
+[[nodiscard]] SpritePlacementMode resolve_sprite_placement_mode(const std::string& asset_name,
+                                                                std::size_t sprite_index,
+                                                                SpritePlacementMode fallback_mode);
 [[nodiscard]] bool sprite_is_visible_for_options(std::size_t sprite_index,
                                                  const SpritePlacementOptions& options);
 [[nodiscard]] std::string format_sprite_placement_report(
@@ -74,6 +79,7 @@ struct SpriteLayerPlacementResult {
     std::uint16_t canvas_width,
     std::uint16_t canvas_height,
     const std::vector<romulus::data::Pl8DecodedSprite>& decoded_sprites,
-    const SpritePlacementOptions& options = {});
+    const SpritePlacementOptions& options = {},
+    const std::string& asset_name = "");
 
 }  // namespace romulus::platform
