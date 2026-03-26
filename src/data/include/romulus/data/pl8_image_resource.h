@@ -81,6 +81,15 @@ struct StructuredPl8RecordHint {
   std::size_t plausible_offset_length_pairs = 0;
   std::size_t monotonic_offset_pairs = 0;
   std::size_t repeated_record_count = 0;
+  std::size_t deterministic_record_count = 0;
+};
+
+struct StructuredPl8OffsetLengthPairHint {
+  std::string source;
+  std::size_t entry_index = 0;
+  std::size_t start_offset = 0;
+  std::size_t length = 0;
+  bool in_bounds = false;
 };
 
 struct StructuredPl8RegionHint {
@@ -89,6 +98,8 @@ struct StructuredPl8RegionHint {
   std::size_t start_offset = 0;
   std::size_t region_size = 0;
   bool in_bounds = false;
+  std::string size_classification;
+  std::vector<std::uint8_t> prefix_preview;
 };
 
 struct StructuredPl8StructuredRegionsProbeReport {
@@ -102,6 +113,7 @@ struct StructuredPl8StructuredRegionsProbeReport {
   std::ptrdiff_t payload_surplus_or_deficit = 0;
   std::vector<StructuredPl8LeadingFieldSample> leading_fields;
   std::vector<StructuredPl8RecordHint> record_hints;
+  std::vector<StructuredPl8OffsetLengthPairHint> offset_length_pair_hints;
   std::vector<StructuredPl8RegionHint> region_hints;
 };
 

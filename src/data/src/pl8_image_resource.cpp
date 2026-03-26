@@ -80,6 +80,35 @@ void copy_preview(const std::span<const std::byte> bytes,
   }
 }
 
+[[nodiscard]] std::string classify_candidate_region_size(const std::size_t region_size,
+                                                         const std::size_t expected_image_size) {
+  if (region_size == expected_image_size) {
+    return "image_like_exact";
+  }
+  if (region_size == Pl8Resource::kSupportedPayloadSize) {
+    return "palette_like_256xrgb";
+  }
+  if (region_size == 0) {
+    return "opaque_empty";
+  }
+  return "opaque_unknown";
+}
+
+void append_region_prefix_preview(std::span<const std::byte> payload,
+                                  const std::size_t start,
+                                  std::vector<std::uint8_t>& preview) {
+  preview.clear();
+  if (start >= payload.size()) {
+    return;
+  }
+  constexpr std::size_t kPreviewBytes = 8;
+  const auto count = std::min(kPreviewBytes, payload.size() - start);
+  preview.reserve(count);
+  for (std::size_t index = 0; index < count; ++index) {
+    preview.push_back(std::to_integer<std::uint8_t>(payload[start + index]));
+  }
+}
+
 [[nodiscard]] ParseResult<DecodedRgbaFromIndexed> decode_indexed_with_256_palette(
     const std::vector<std::uint8_t>& indexed_pixels,
     const std::uint16_t width,
@@ -422,6 +451,7 @@ ParseResult<StructuredPl8StructuredRegionsProbeReport> probe_caesar2_rat_back_st
 
   constexpr std::array<std::size_t, 5> kRecordSizes = {4, 6, 8, 12, 16};
   constexpr std::size_t kMaxScannedRecords = 64;
+  constexpr std::size_t kMaxOffsetLengthHints = 12;
   for (const auto record_size : kRecordSizes) {
     if (report.payload_size < record_size * 2) {
       continue;
@@ -468,6 +498,13 @@ ParseResult<StructuredPl8StructuredRegionsProbeReport> probe_caesar2_rat_back_st
 
       if (length > 0 && start < report.payload_size && start + length <= report.payload_size) {
         plausible_pairs += 1;
+        if (report.offset_length_pair_hints.size() < kMaxOffsetLengthHints) {
+          report.offset_length_pair_hints.push_back({.source = "record_scan",
+                                                     .entry_index = record_index,
+                                                     .start_offset = start,
+                                                     .length = length,
+                                                     .in_bounds = true});
+        }
         if (previous_start.has_value() && start >= previous_start.value()) {
           monotonic_offsets += 1;
         }
@@ -479,7 +516,8 @@ ParseResult<StructuredPl8StructuredRegionsProbeReport> probe_caesar2_rat_back_st
                                    .scanned_records = scanned_records,
                                    .plausible_offset_length_pairs = plausible_pairs,
                                    .monotonic_offset_pairs = monotonic_offsets,
-                                   .repeated_record_count = repeated_records});
+                                   .repeated_record_count = repeated_records,
+                                   .deterministic_record_count = report.payload_size / record_size});
   }
 
   constexpr std::size_t kMaxPairRegions = 12;
@@ -489,8 +527,22 @@ ParseResult<StructuredPl8StructuredRegionsProbeReport> probe_caesar2_rat_back_st
     const auto start = static_cast<std::size_t>(report.leading_fields[field_index].value_u32le);
     const auto size = static_cast<std::size_t>(report.leading_fields[field_index + 1].value_u32le);
     const bool in_bounds = size > 0 && start < report.payload_size && start + size <= report.payload_size;
-    report.region_hints.push_back(
-        {.source = "leading_u32_pairs", .entry_index = field_index / 2, .start_offset = start, .region_size = size, .in_bounds = in_bounds});
+    if (report.offset_length_pair_hints.size() < kMaxOffsetLengthHints) {
+      report.offset_length_pair_hints.push_back(
+          {.source = "leading_u32_pairs", .entry_index = field_index / 2, .start_offset = start, .length = size, .in_bounds = in_bounds});
+    }
+
+    StructuredPl8RegionHint region_hint{
+        .source = "leading_u32_pairs",
+        .entry_index = field_index / 2,
+        .start_offset = start,
+        .region_size = size,
+        .in_bounds = in_bounds,
+        .size_classification = classify_candidate_region_size(size, report.expected_image_size),
+    };
+    append_region_prefix_preview(
+        std::span<const std::byte>(payload_begin, report.payload_size), region_hint.start_offset, region_hint.prefix_preview);
+    report.region_hints.push_back(std::move(region_hint));
   }
 
   constexpr std::size_t kMaxOffsetTableFields = 16;
@@ -511,11 +563,18 @@ ParseResult<StructuredPl8StructuredRegionsProbeReport> probe_caesar2_rat_back_st
       if (next <= start) {
         continue;
       }
-      report.region_hints.push_back({.source = "monotonic_offset_table",
-                                     .entry_index = index,
-                                     .start_offset = start,
-                                     .region_size = next - start,
-                                     .in_bounds = true});
+      const auto size = next - start;
+      StructuredPl8RegionHint region_hint{
+          .source = "monotonic_offset_table",
+          .entry_index = index,
+          .start_offset = start,
+          .region_size = size,
+          .in_bounds = true,
+          .size_classification = classify_candidate_region_size(size, report.expected_image_size),
+      };
+      append_region_prefix_preview(
+          std::span<const std::byte>(payload_begin, report.payload_size), region_hint.start_offset, region_hint.prefix_preview);
+      report.region_hints.push_back(std::move(region_hint));
     }
   }
 
@@ -743,6 +802,15 @@ std::string format_pl8_structured_regions_probe_report(const StructuredPl8Struct
     output << "    plausible_offset_length_pairs: " << hint.plausible_offset_length_pairs << "\n";
     output << "    monotonic_offset_pairs: " << hint.monotonic_offset_pairs << "\n";
     output << "    repeated_record_count: " << hint.repeated_record_count << "\n";
+    output << "    deterministic_record_count: " << hint.deterministic_record_count << "\n";
+  }
+  output << "offset_length_pair_hints:\n";
+  for (const auto& pair_hint : report.offset_length_pair_hints) {
+    output << "  - source: " << pair_hint.source << "\n";
+    output << "    entry_index: " << pair_hint.entry_index << "\n";
+    output << "    start_offset: " << pair_hint.start_offset << "\n";
+    output << "    length: " << pair_hint.length << "\n";
+    output << "    in_bounds: " << (pair_hint.in_bounds ? "yes" : "no") << "\n";
   }
   output << "candidate_regions:\n";
   for (const auto& region : report.region_hints) {
@@ -751,6 +819,8 @@ std::string format_pl8_structured_regions_probe_report(const StructuredPl8Struct
     output << "    start_offset: " << region.start_offset << "\n";
     output << "    region_size: " << region.region_size << "\n";
     output << "    in_bounds: " << (region.in_bounds ? "yes" : "no") << "\n";
+    output << "    size_classification: " << region.size_classification << "\n";
+    output << "    prefix_preview: " << format_preview_bytes(region.prefix_preview) << "\n";
   }
   output << "decode_status: not_attempted\n";
   return output.str();
