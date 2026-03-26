@@ -98,6 +98,35 @@ struct Win95PackIlbmBatchReportOptions {
   bool include_all_entries = false;
 };
 
+struct Win95PackIlbmIndexEntry {
+  std::size_t entry_index = 0;
+  std::size_t offset = 0;
+  std::size_t size = 0;
+  std::size_t width = 0;
+  std::size_t height = 0;
+  std::optional<std::size_t> palette_color_count;
+  std::string classification_hint;
+};
+
+struct Win95PackIlbmIndex {
+  std::size_t total_entry_count = 0;
+  std::size_t candidate_entry_count = 0;
+  std::size_t successful_entry_count = 0;
+  std::vector<Win95PackIlbmIndexEntry> successful_entries;
+};
+
+struct Win95PackIlbmExportResult {
+  std::size_t requested_entry_index = 0;
+  bool success = false;
+  std::optional<std::filesystem::path> output_path;
+  std::optional<std::string> failure_reason;
+};
+
+struct Win95PackIlbmIndexReportOptions {
+  std::size_t preview_entry_limit = 8;
+  bool include_all_entries = false;
+};
+
 struct Win95DataContainerProbeError {
   std::filesystem::path requested_path;
   std::string message;
@@ -131,6 +160,10 @@ constexpr std::size_t k_default_win95_container_max_file_load_bytes = 64 * 1024 
 [[nodiscard]] Win95PackIlbmBatchResult analyze_win95_pack_ilbm_batch(
     std::span<const std::uint8_t> container_bytes,
     const Win95PackContainerResource& container);
+[[nodiscard]] Win95PackIlbmIndex build_win95_pack_ilbm_success_index(const Win95PackIlbmBatchResult& batch_result);
+[[nodiscard]] std::optional<Win95PackIlbmIndexEntry> find_win95_pack_ilbm_index_entry(
+    const Win95PackIlbmIndex& index,
+    std::size_t entry_index);
 
 [[nodiscard]] ProbeWin95DataContainerResult probe_win95_data_container_file(
     const std::filesystem::path& data_root,
@@ -144,5 +177,9 @@ constexpr std::size_t k_default_win95_container_max_file_load_bytes = 64 * 1024 
     const Win95PackIlbmBatchResult& result,
     std::string_view source_label = "",
     Win95PackIlbmBatchReportOptions options = {});
+[[nodiscard]] std::string format_win95_pack_ilbm_index_report(
+    const Win95PackIlbmIndex& index,
+    std::string_view source_label = "",
+    Win95PackIlbmIndexReportOptions options = {});
 
 }  // namespace romulus::data

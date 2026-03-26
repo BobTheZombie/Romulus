@@ -1,8 +1,10 @@
 #include "romulus/data/win95_data_container.h"
 
+#include "romulus/data/image_export.h"
 #include "romulus/data/ilbm_image.h"
 
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -206,6 +208,36 @@ std::vector<std::uint8_t> make_pack_with_ilbm_batch_fixture() {
   bytes.insert(bytes.end(), valid_ilbm.begin(), valid_ilbm.end());
   bytes.insert(bytes.end(), malformed_ilbm.begin(), malformed_ilbm.end());
   bytes.insert(bytes.end(), opaque_payload.begin(), opaque_payload.end());
+  return bytes;
+}
+
+std::vector<std::uint8_t> make_pack_with_multiple_successful_ilbm_entries_fixture() {
+  const auto valid_a = make_fixture_ilbm_payload();
+  auto valid_b = make_fixture_ilbm_payload();
+  if (!valid_b.empty()) {
+    valid_b.back() = 0x7F;
+  }
+  const std::vector<std::uint8_t> malformed_ilbm = {'F', 'O', 'R', 'M', 0x00, 0x00, 0x00, 0x04, 'B', 'A', 'D', '!'};
+
+  std::vector<std::uint8_t> bytes;
+  bytes.insert(bytes.end(), {'P', 'A', 'C', 'K'});
+  append_u32_le(bytes, 3);
+
+  const std::uint32_t table_end = 8 + (3 * 8);
+  const std::uint32_t entry0_offset = table_end;
+  const std::uint32_t entry1_offset = entry0_offset + static_cast<std::uint32_t>(valid_a.size());
+  const std::uint32_t entry2_offset = entry1_offset + static_cast<std::uint32_t>(malformed_ilbm.size());
+
+  append_u32_le(bytes, entry0_offset);
+  append_u32_le(bytes, static_cast<std::uint32_t>(valid_a.size()));
+  append_u32_le(bytes, entry1_offset);
+  append_u32_le(bytes, static_cast<std::uint32_t>(malformed_ilbm.size()));
+  append_u32_le(bytes, entry2_offset);
+  append_u32_le(bytes, static_cast<std::uint32_t>(valid_b.size()));
+
+  bytes.insert(bytes.end(), valid_a.begin(), valid_a.end());
+  bytes.insert(bytes.end(), malformed_ilbm.begin(), malformed_ilbm.end());
+  bytes.insert(bytes.end(), valid_b.begin(), valid_b.end());
   return bytes;
 }
 
@@ -587,6 +619,98 @@ int test_batch_report_formatting_and_preview_bounds() {
                      "detailed report should avoid truncation marker");
 }
 
+int test_builds_successful_ilbm_index_and_stable_report() {
+  const auto bytes = make_pack_with_multiple_successful_ilbm_entries_fixture();
+  const auto parsed = romulus::data::parse_win95_pack_container(bytes);
+  if (assert_true(parsed.ok(), "index test requires valid PACK parse") != 0) {
+    return 1;
+  }
+
+  const auto batch = romulus::data::analyze_win95_pack_ilbm_batch(bytes, parsed.value.value());
+  const auto index = romulus::data::build_win95_pack_ilbm_success_index(batch);
+  if (assert_true(index.total_entry_count == 3, "index should preserve total entry count") != 0) {
+    return 1;
+  }
+  if (assert_true(index.successful_entry_count == 2, "index should include only successful ILBM entries") != 0) {
+    return 1;
+  }
+  if (assert_true(index.successful_entries.size() == 2, "index successful entries vector should be bounded") != 0) {
+    return 1;
+  }
+  if (assert_true(index.successful_entries[0].entry_index == 0 && index.successful_entries[1].entry_index == 2,
+                  "index ordering should remain deterministic by entry index") != 0) {
+    return 1;
+  }
+
+  const auto report = romulus::data::format_win95_pack_ilbm_index_report(
+      index,
+      "DATA",
+      romulus::data::Win95PackIlbmIndexReportOptions{
+          .preview_entry_limit = 1,
+          .include_all_entries = false,
+      });
+  if (assert_true(report.find("# Caesar II Win95 PACK ILBM Success Index Report") != std::string::npos,
+                  "index report should include stable title") != 0) {
+    return 1;
+  }
+  if (assert_true(report.find("successful_ilbm_entries: 2") != std::string::npos,
+                  "index report should include successful entry count") != 0) {
+    return 1;
+  }
+  if (assert_true(report.find("successful_entries_preview: showing 1 of 2") != std::string::npos,
+                  "index report should honor preview bounds") != 0) {
+    return 1;
+  }
+  return assert_true(report.find("successful_entries_preview_truncated: yes") != std::string::npos,
+                     "index report should mark truncation when preview is bounded");
+}
+
+int test_index_lookup_and_export_path_behavior() {
+  const auto bytes = make_pack_with_multiple_successful_ilbm_entries_fixture();
+  const auto parsed = romulus::data::parse_win95_pack_container(bytes);
+  if (assert_true(parsed.ok(), "export path test requires valid PACK parse") != 0) {
+    return 1;
+  }
+
+  const auto batch = romulus::data::analyze_win95_pack_ilbm_batch(bytes, parsed.value.value());
+  const auto index = romulus::data::build_win95_pack_ilbm_success_index(batch);
+
+  const auto invalid_lookup = romulus::data::find_win95_pack_ilbm_index_entry(index, 99);
+  if (assert_true(!invalid_lookup.has_value(), "invalid entry index should not be found in success index") != 0) {
+    return 1;
+  }
+
+  const auto nonsuccess_lookup = romulus::data::find_win95_pack_ilbm_index_entry(index, 1);
+  if (assert_true(!nonsuccess_lookup.has_value(), "failed ILBM entries should not be exportable from success index") != 0) {
+    return 1;
+  }
+
+  const auto success_lookup = romulus::data::find_win95_pack_ilbm_index_entry(index, 2);
+  if (assert_true(success_lookup.has_value(), "successful entry should be discoverable for export") != 0) {
+    return 1;
+  }
+
+  const auto extracted = romulus::data::extract_win95_pack_ilbm_entry(bytes, parsed.value.value(), 2);
+  if (assert_true(extracted.ok(), "successful indexed entry should extract cleanly") != 0) {
+    return 1;
+  }
+
+  const auto rgba = romulus::data::convert_ilbm_to_rgba(extracted.value->ilbm);
+  if (assert_true(rgba.ok(), "successful indexed entry should convert to RGBA") != 0) {
+    return 1;
+  }
+
+  const auto output_path = std::filesystem::temp_directory_path() / "romulus_pack_ilbm_index_export.ppm";
+  const auto exported = romulus::data::export_rgba_image_as_ppm(rgba.value.value(), output_path);
+  if (assert_true(exported.ok(), "successful indexed entry should export via shared PPM pipeline") != 0) {
+    return 1;
+  }
+
+  const auto file_size = std::filesystem::file_size(output_path);
+  std::filesystem::remove(output_path);
+  return assert_true(file_size > 0, "exported PPM output should be non-empty");
+}
+
 }  // namespace
 
 int main() {
@@ -647,6 +771,14 @@ int main() {
   }
 
   if (test_batch_report_formatting_and_preview_bounds() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_builds_successful_ilbm_index_and_stable_report() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_index_lookup_and_export_path_behavior() != 0) {
     return EXIT_FAILURE;
   }
 
