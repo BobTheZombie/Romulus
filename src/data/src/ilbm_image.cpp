@@ -92,19 +92,19 @@ struct ChunkView {
                                                            std::uint16_t height,
                                                            std::size_t buffer_size) {
   if (width == 0 || height == 0) {
-    return {.error = make_invalid_lbm_error(0, kBmhdSize, buffer_size, "ILBM dimensions must be non-zero")};
+    return {.error = make_invalid_lbm_error(0, kBmhdSize, buffer_size, "LBM dimensions must be non-zero")};
   }
   if (width > IlbmImageResource::kMaxDimension || height > IlbmImageResource::kMaxDimension) {
     return {.error = make_invalid_lbm_error(
                 0,
                 kBmhdSize,
                 buffer_size,
-                "ILBM dimensions exceed supported bounds (max 4096x4096)")};
+                "LBM dimensions exceed supported bounds (max 4096x4096)")};
   }
 
   const auto product = static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(height);
   if (product > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
-    return {.error = make_invalid_lbm_error(0, kBmhdSize, buffer_size, "ILBM pixel count exceeds host limits")};
+    return {.error = make_invalid_lbm_error(0, kBmhdSize, buffer_size, "LBM pixel count exceeds host limits")};
   }
   return {.value = static_cast<std::size_t>(product)};
 }
@@ -214,6 +214,34 @@ struct ChunkView {
   return {.value = std::move(indexed)};
 }
 
+[[nodiscard]] ParseResult<std::vector<std::uint8_t>> decode_packed_to_indexed(std::span<const std::uint8_t> packed,
+                                                                               std::uint16_t width,
+                                                                               std::uint16_t height,
+                                                                               std::uint8_t depth,
+                                                                               std::size_t body_offset,
+                                                                               std::size_t buffer_size) {
+  if (depth != 8U) {
+    std::ostringstream message;
+    message << "Unsupported PBM depth " << static_cast<unsigned int>(depth)
+            << "; only 8-bit packed pixels are supported";
+    return {.error = make_invalid_lbm_error(0, kBmhdSize, buffer_size, message.str())};
+  }
+
+  const auto pixel_count = checked_pixel_count(width, height, buffer_size);
+  if (!pixel_count.ok()) {
+    return {.error = pixel_count.error};
+  }
+
+  if (packed.size() != pixel_count.value.value()) {
+    std::ostringstream message;
+    message << "PBM packed BODY size mismatch: expected " << pixel_count.value.value() << " bytes but got "
+            << packed.size();
+    return {.error = make_invalid_lbm_error(body_offset, packed.size(), buffer_size, message.str())};
+  }
+
+  return {.value = std::vector<std::uint8_t>(packed.begin(), packed.end())};
+}
+
 }  // namespace
 
 ParseResult<IlbmImageResource> parse_ilbm_image(std::span<const std::byte> bytes) {
@@ -236,8 +264,16 @@ ParseResult<IlbmImageResource> parse_ilbm_image(std::span<const std::byte> bytes
   if (!form_type.ok()) {
     return {.error = form_type.error};
   }
-  if (!tags_equal(form_type.value.value(), "ILBM")) {
-    return {.error = make_invalid_lbm_error(8, 4, bytes.size(), "Unsupported FORM type; expected ILBM")};
+  LbmFormSubtype form_subtype = LbmFormSubtype::Ilbm;
+  LbmDecodeMode decode_mode = LbmDecodeMode::Planar;
+  if (tags_equal(form_type.value.value(), "ILBM")) {
+    form_subtype = LbmFormSubtype::Ilbm;
+    decode_mode = LbmDecodeMode::Planar;
+  } else if (tags_equal(form_type.value.value(), "PBM ")) {
+    form_subtype = LbmFormSubtype::Pbm;
+    decode_mode = LbmDecodeMode::PackedPixels;
+  } else {
+    return {.error = make_invalid_lbm_error(8, 4, bytes.size(), "Unsupported FORM subtype; expected ILBM or PBM ")};
   }
 
   const auto expected_total = static_cast<std::uint64_t>(form_size.value.value()) + 8U;
@@ -251,6 +287,7 @@ ParseResult<IlbmImageResource> parse_ilbm_image(std::span<const std::byte> bytes
   std::optional<std::uint16_t> width;
   std::optional<std::uint16_t> height;
   std::optional<std::uint8_t> planes;
+  std::optional<std::uint8_t> bmhd_masking;
   std::optional<std::uint8_t> compression;
   std::optional<std::size_t> bmhd_offset;
   std::optional<std::size_t> cmap_offset;
@@ -372,26 +409,51 @@ ParseResult<IlbmImageResource> parse_ilbm_image(std::span<const std::byte> bytes
         return {.error = dims_ok.error};
       }
 
-      if (plane_count.value.value() != IlbmImageResource::kSupportedPlaneCount) {
-        std::ostringstream message;
-        message << "Unsupported BMHD bitplane count " << static_cast<unsigned int>(plane_count.value.value())
-                << "; only 8-plane indexed ILBM is supported";
-        return {.error = make_invalid_lbm_error(chunk.data_offset + 8, 1, bytes.size(), message.str())};
-      }
+      if (form_subtype == LbmFormSubtype::Ilbm) {
+        if (plane_count.value.value() != IlbmImageResource::kSupportedPlaneCount) {
+          std::ostringstream message;
+          message << "Unsupported BMHD bitplane count " << static_cast<unsigned int>(plane_count.value.value())
+                  << "; only 8-plane indexed ILBM is supported";
+          return {.error = make_invalid_lbm_error(chunk.data_offset + 8, 1, bytes.size(), message.str())};
+        }
 
-      if (masking.value.value() != 0) {
-        return {.error = make_invalid_lbm_error(
-                    chunk.data_offset + 9,
-                    1,
-                    bytes.size(),
-                    "Unsupported BMHD masking mode; only masking=0 is supported")};
-      }
+        if (masking.value.value() != 0) {
+          return {.error = make_invalid_lbm_error(
+                      chunk.data_offset + 9,
+                      1,
+                      bytes.size(),
+                      "Unsupported BMHD masking mode; only masking=0 is supported")};
+        }
 
-      if (compression_mode.value.value() != 0 && compression_mode.value.value() != 1) {
-        std::ostringstream message;
-        message << "Unsupported BMHD compression mode " << static_cast<unsigned int>(compression_mode.value.value())
-                << "; supported modes are 0 (none) and 1 (ByteRun1)";
-        return {.error = make_invalid_lbm_error(chunk.data_offset + 10, 1, bytes.size(), message.str())};
+        if (compression_mode.value.value() != 0 && compression_mode.value.value() != 1) {
+          std::ostringstream message;
+          message << "Unsupported BMHD compression mode " << static_cast<unsigned int>(compression_mode.value.value())
+                  << "; supported modes are 0 (none) and 1 (ByteRun1)";
+          return {.error = make_invalid_lbm_error(chunk.data_offset + 10, 1, bytes.size(), message.str())};
+        }
+      } else {
+        if (plane_count.value.value() != 8U) {
+          std::ostringstream message;
+          message << "Unsupported PBM BMHD depth " << static_cast<unsigned int>(plane_count.value.value())
+                  << "; only depth=8 packed pixels are supported";
+          return {.error = make_invalid_lbm_error(chunk.data_offset + 8, 1, bytes.size(), message.str())};
+        }
+
+        if (masking.value.value() != 0U) {
+          return {.error = make_invalid_lbm_error(
+                      chunk.data_offset + 9,
+                      1,
+                      bytes.size(),
+                      "Unsupported PBM BMHD masking mode; only masking=0 is supported")};
+        }
+
+        if (compression_mode.value.value() != 0U && compression_mode.value.value() != 1U) {
+          std::ostringstream message;
+          message << "Unsupported PBM BMHD compression mode "
+                  << static_cast<unsigned int>(compression_mode.value.value())
+                  << "; supported modes are 0 (none) and 1 (ByteRun1)";
+          return {.error = make_invalid_lbm_error(chunk.data_offset + 10, 1, bytes.size(), message.str())};
+        }
       }
 
       (void)x_origin;
@@ -406,6 +468,7 @@ ParseResult<IlbmImageResource> parse_ilbm_image(std::span<const std::byte> bytes
       width = bmhd_width.value.value();
       height = bmhd_height.value.value();
       planes = plane_count.value.value();
+      bmhd_masking = masking.value.value();
       compression = compression_mode.value.value();
       bmhd_offset = chunk.header_offset;
     } else if (tags_equal(chunk.id, "CMAP")) {
@@ -484,40 +547,69 @@ ParseResult<IlbmImageResource> parse_ilbm_image(std::span<const std::byte> bytes
     return {.error = make_invalid_lbm_error(0, kFormHeaderSize, bytes.size(), "Required BODY chunk was not found")};
   }
 
-  const auto row_bytes = static_cast<std::size_t>(((width.value() + 15U) / 16U) * 2U);
-  const auto expected_planar_bytes =
-      row_bytes * static_cast<std::size_t>(height.value()) * static_cast<std::size_t>(planes.value());
+  std::vector<std::uint8_t> decoded_body;
+  std::vector<std::uint8_t> indexed_pixels;
+  if (decode_mode == LbmDecodeMode::Planar) {
+    const auto row_bytes = static_cast<std::size_t>(((width.value() + 15U) / 16U) * 2U);
+    const auto expected_planar_bytes =
+        row_bytes * static_cast<std::size_t>(height.value()) * static_cast<std::size_t>(planes.value());
 
-  std::vector<std::uint8_t> decoded_planar;
-  if (compression.value() == 0U) {
-    if (body_payload.size() != expected_planar_bytes) {
-      std::ostringstream message;
-      message << "Uncompressed BODY size mismatch: expected " << expected_planar_bytes << " bytes but got "
-              << body_payload.size();
-      return {.error = make_invalid_lbm_error(body_offset.value(), body_payload.size(), bytes.size(), message.str())};
+    if (compression.value() == 0U) {
+      if (body_payload.size() != expected_planar_bytes) {
+        std::ostringstream message;
+        message << "Uncompressed BODY size mismatch: expected " << expected_planar_bytes << " bytes but got "
+                << body_payload.size();
+        return {.error = make_invalid_lbm_error(body_offset.value(), body_payload.size(), bytes.size(), message.str())};
+      }
+      decoded_body = body_payload;
+    } else {
+      const auto decoded = decode_byte_run_1(
+          std::span<const std::byte>(reinterpret_cast<const std::byte*>(body_payload.data()), body_payload.size()),
+          expected_planar_bytes,
+          body_offset.value(),
+          bytes.size());
+      if (!decoded.ok()) {
+        return {.error = decoded.error};
+      }
+      decoded_body = std::move(decoded.value.value());
     }
-    decoded_planar = body_payload;
+
+    const auto indexed = decode_planar_to_indexed(decoded_body, width.value(), height.value(), planes.value(), bytes.size());
+    if (!indexed.ok()) {
+      return {.error = indexed.error};
+    }
+    indexed_pixels = std::move(indexed.value.value());
   } else {
-    const auto decoded = decode_byte_run_1(
-        std::span<const std::byte>(reinterpret_cast<const std::byte*>(body_payload.data()), body_payload.size()),
-        expected_planar_bytes,
-        body_offset.value(),
-        bytes.size());
-    if (!decoded.ok()) {
-      return {.error = decoded.error};
+    const auto expected_packed_bytes = static_cast<std::size_t>(width.value()) * static_cast<std::size_t>(height.value());
+    if (compression.value() == 0U) {
+      decoded_body = body_payload;
+    } else {
+      const auto decoded = decode_byte_run_1(
+          std::span<const std::byte>(reinterpret_cast<const std::byte*>(body_payload.data()), body_payload.size()),
+          expected_packed_bytes,
+          body_offset.value(),
+          bytes.size());
+      if (!decoded.ok()) {
+        return {.error = decoded.error};
+      }
+      decoded_body = std::move(decoded.value.value());
     }
-    decoded_planar = std::move(decoded.value.value());
-  }
 
-  const auto indexed = decode_planar_to_indexed(decoded_planar, width.value(), height.value(), planes.value(), bytes.size());
-  if (!indexed.ok()) {
-    return {.error = indexed.error};
+    const auto indexed = decode_packed_to_indexed(
+        decoded_body, width.value(), height.value(), planes.value(), body_offset.value(), bytes.size());
+    if (!indexed.ok()) {
+      return {.error = indexed.error};
+    }
+    indexed_pixels = std::move(indexed.value.value());
   }
 
   IlbmImageResource image;
+  image.form_subtype = form_subtype;
+  image.decode_mode = decode_mode;
   image.width = width.value();
   image.height = height.value();
   image.plane_count = planes.value();
+  image.masking = bmhd_masking.value_or(0);
   image.compression = compression.value();
   image.bmhd_offset = bmhd_offset.value();
   image.cmap_offset = cmap_offset.value();
@@ -525,7 +617,7 @@ ParseResult<IlbmImageResource> parse_ilbm_image(std::span<const std::byte> bytes
   image.body_size = body_payload.size();
   image.palette_entries = std::move(palette_entries);
   image.body_payload = std::move(body_payload);
-  image.indexed_pixels = std::move(indexed.value.value());
+  image.indexed_pixels = std::move(indexed_pixels);
   return {.value = std::move(image)};
 }
 
@@ -534,12 +626,35 @@ ParseResult<IlbmImageResource> parse_ilbm_image(std::span<const std::uint8_t> by
       std::span<const std::byte>(reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()));
 }
 
+const char* lbm_form_subtype_name(const LbmFormSubtype subtype) {
+  switch (subtype) {
+    case LbmFormSubtype::Ilbm:
+      return "ILBM";
+    case LbmFormSubtype::Pbm:
+      return "PBM ";
+  }
+  return "unknown";
+}
+
+const char* lbm_decode_mode_name(const LbmDecodeMode mode) {
+  switch (mode) {
+    case LbmDecodeMode::Planar:
+      return "planar";
+    case LbmDecodeMode::PackedPixels:
+      return "packed";
+  }
+  return "unknown";
+}
+
 std::string format_lbm_report(const IlbmImageResource& image, std::size_t max_palette_entries) {
   std::ostringstream output;
   output << "# Caesar II Win95 LBM Report\n";
+  output << "form_subtype: " << lbm_form_subtype_name(image.form_subtype) << "\n";
+  output << "decode_mode: " << lbm_decode_mode_name(image.decode_mode) << "\n";
   output << "width: " << image.width << "\n";
   output << "height: " << image.height << "\n";
-  output << "planes: " << static_cast<unsigned int>(image.plane_count) << "\n";
+  output << "depth: " << static_cast<unsigned int>(image.plane_count) << "\n";
+  output << "masking: " << static_cast<unsigned int>(image.masking) << "\n";
   output << "compression: " << static_cast<unsigned int>(image.compression) << "\n";
   output << "palette_entries: " << image.palette_entries.size() << "\n";
   output << "body_size: " << image.body_size << " bytes\n";
@@ -582,11 +697,11 @@ ParseResult<RgbaImage> convert_ilbm_to_rgba(const IlbmImageResource& image) {
                 0,
                 image.indexed_pixels.size(),
                 pixel_count.value.value(),
-                "ILBM indexed pixel buffer size does not match image dimensions")};
+                "LBM indexed pixel buffer size does not match image dimensions")};
   }
 
   if (image.palette_entries.empty()) {
-    return {.error = make_invalid_lbm_error(0, 0, 0, "ILBM CMAP palette is empty")};
+    return {.error = make_invalid_lbm_error(0, 0, 0, "LBM CMAP palette is empty")};
   }
 
   RgbaImage rgba;

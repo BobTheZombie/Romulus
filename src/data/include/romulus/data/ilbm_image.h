@@ -12,13 +12,26 @@
 
 namespace romulus::data {
 
+enum class LbmFormSubtype {
+  Ilbm,
+  Pbm,
+};
+
+enum class LbmDecodeMode {
+  Planar,
+  PackedPixels,
+};
+
 struct IlbmImageResource {
   static constexpr std::uint16_t kMaxDimension = 4096;
   static constexpr std::uint8_t kSupportedPlaneCount = 8;
 
+  LbmFormSubtype form_subtype = LbmFormSubtype::Ilbm;
+  LbmDecodeMode decode_mode = LbmDecodeMode::Planar;
   std::uint16_t width = 0;
   std::uint16_t height = 0;
   std::uint8_t plane_count = 0;
+  std::uint8_t masking = 0;
   std::uint8_t compression = 0;
   std::size_t bmhd_offset = 0;
   std::size_t cmap_offset = 0;
@@ -35,5 +48,7 @@ struct IlbmImageResource {
 [[nodiscard]] ParseResult<RgbaImage> convert_ilbm_to_rgba(const IlbmImageResource& image);
 
 [[nodiscard]] std::string format_lbm_report(const IlbmImageResource& image, std::size_t max_palette_entries = 16);
+[[nodiscard]] const char* lbm_form_subtype_name(LbmFormSubtype subtype);
+[[nodiscard]] const char* lbm_decode_mode_name(LbmDecodeMode mode);
 
 }  // namespace romulus::data
