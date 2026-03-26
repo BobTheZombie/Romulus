@@ -16,6 +16,7 @@
 #include "romulus/data/image256_resource.h"
 #include "romulus/data/ilbm_image.h"
 #include "romulus/data/pl8_image_resource.h"
+#include "romulus/data/pl8_sprite_table_resource.h"
 #include "romulus/platform/bootstrap.h"
 #include "romulus/platform/viewer.h"
 
@@ -166,13 +167,40 @@ void blend_rgba_layers(romulus::data::RgbaImage* destination, const romulus::dat
     if (!decoded_overlay.ok()) {
       romulus::core::log_info("Forum compose overlay FORUM-style decode failed for image='" +
                               selection->image_pl8_logical_path.string() + "' reason='" +
-                              decoded_overlay.error->message + "'; attempting RAT_BACK-style structured parser.");
+                              decoded_overlay.error->message + "'; attempting PL8 sprite-table composition.");
+      const auto sprite_overlay = romulus::data::decode_caesar2_pl8_sprite_pair_multi(
+          loaded_image.value->bytes, loaded_palette.value->bytes, true);
+      if (sprite_overlay.ok() && sprite_overlay.value->composition.has_value()) {
+        decoded_overlay.value = romulus::data::Pl8Image256PairDecodeResult{
+            .image_pl8 = {.header_size = 0,
+                          .payload_offset = 0,
+                          .width = sprite_overlay.value->composition->rgba_image.width,
+                          .height = sprite_overlay.value->composition->rgba_image.height,
+                          .payload_size = 0,
+                          .indexed_pixels = {}},
+            .palette_256 = sprite_overlay.value->palette_256,
+            .rgba_image = sprite_overlay.value->composition->rgba_image,
+        };
+        decoded_overlay.error.reset();
+        romulus::core::log_info("Forum compose overlay PL8 sprite-table composition succeeded for image='" +
+                                selection->image_pl8_logical_path.string() + "'.");
+      } else {
+        std::string sprite_reason = "no_composition";
+        if (!sprite_overlay.ok()) {
+          sprite_reason = sprite_overlay.error->message;
+        } else if (!sprite_overlay.value->decode_supported) {
+          sprite_reason = "sprite_decode_unsupported";
+        }
+        romulus::core::log_info("Forum compose overlay sprite-table composition failed for image='" +
+                                selection->image_pl8_logical_path.string() + "' reason='" + sprite_reason +
+                                "'; attempting RAT_BACK-style structured parser.");
       const auto structured_overlay = romulus::data::decode_caesar2_rat_back_structured_pl8_image_pair(
           loaded_image.value->bytes, loaded_palette.value->bytes, true);
       if (!structured_overlay.ok()) {
         romulus::core::log_warning("Forum compose overlay skipped: decode failed for image='" +
                                    selection->image_pl8_logical_path.string() + "' forum_reason='" +
-                                   decoded_overlay.error->message + "' structured_reason='" +
+                                   decoded_overlay.error->message + "' sprite_reason='" + sprite_reason +
+                                   "' structured_reason='" +
                                    structured_overlay.error->message + "'");
         continue;
       }
@@ -188,6 +216,7 @@ void blend_rgba_layers(romulus::data::RgbaImage* destination, const romulus::dat
           .rgba_image = structured_overlay.value->rgba_image,
       };
       decoded_overlay.error.reset();
+      }
     }
 
     if (decoded_overlay.value->rgba_image.width != composed.width ||

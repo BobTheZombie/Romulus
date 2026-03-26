@@ -1,6 +1,7 @@
 #include "romulus/data/pl8_sprite_table_resource.h"
 
 #include <algorithm>
+#include <limits>
 #include <sstream>
 
 #include "romulus/data/palette.h"
@@ -243,6 +244,163 @@ ParseResult<Pl8SpritePairDecodeResult> decode_caesar2_pl8_sprite_pair(std::span<
   return {.value = std::move(result)};
 }
 
+ParseResult<Pl8SpritePairMultiDecodeResult> decode_caesar2_pl8_sprite_pair_multi(
+    std::span<const std::uint8_t> image_pl8_bytes,
+    std::span<const std::uint8_t> palette_256_bytes,
+    const bool index_zero_transparent) {
+  const auto parsed_image = parse_caesar2_pl8_sprite_table(image_pl8_bytes);
+  if (!parsed_image.ok()) {
+    return {.error = parsed_image.error};
+  }
+
+  const auto parsed_palette = parse_pl8_resource(palette_256_bytes);
+  if (!parsed_palette.ok()) {
+    return {.error = parsed_palette.error};
+  }
+
+  PaletteResource palette;
+  palette.entries.reserve(parsed_palette.value->palette_entries.size());
+  for (const auto& entry : parsed_palette.value->palette_entries) {
+    if (entry.red > 63 || entry.green > 63 || entry.blue > 63) {
+      return {.error = make_invalid_sprite_table_error(
+                  parsed_palette.value->payload_size,
+                  parsed_palette.value->payload_size,
+                  ".256 palette entry exceeds supported 6-bit component range for indexed conversion")};
+    }
+    palette.entries.push_back(entry);
+  }
+
+  Pl8SpritePairMultiDecodeResult result;
+  result.image_pl8 = parsed_image.value.value();
+  result.palette_256 = parsed_palette.value.value();
+  result.decode_supported = !result.image_pl8.header.rle_encoded();
+  result.sprite_reports.reserve(result.image_pl8.sprites.size());
+
+  bool all_supported = !result.image_pl8.header.rle_encoded();
+  bool has_composable = false;
+  std::int32_t min_x = 0;
+  std::int32_t min_y = 0;
+  std::int32_t max_x = 0;
+  std::int32_t max_y = 0;
+  bool bounds_initialized = false;
+
+  for (std::size_t index = 0; index < result.image_pl8.sprites.size(); ++index) {
+    Pl8SpriteReportEntry report{.sprite_index = index, .decode_status = "not_attempted", .composition_status = "skipped"};
+    const auto decoded_sprite = decode_caesar2_pl8_type0_sprite(image_pl8_bytes, index);
+    if (!decoded_sprite.ok()) {
+      report.decode_status = "failed";
+      report.composition_status = "decode_failed";
+      all_supported = false;
+      result.sprite_reports.push_back(std::move(report));
+      continue;
+    }
+    report.decode_status = "supported_type0";
+
+    IndexedImageResource indexed;
+    indexed.width = decoded_sprite.value->sprite.width;
+    indexed.height = decoded_sprite.value->sprite.height;
+    indexed.indexed_pixels = decoded_sprite.value->indexed_pixels;
+    const auto rgba = apply_palette_to_indexed_image(indexed, palette, index_zero_transparent);
+    if (!rgba.ok()) {
+      return {.error = rgba.error};
+    }
+
+    const auto sprite_min_x = static_cast<std::int32_t>(decoded_sprite.value->sprite.x);
+    const auto sprite_min_y = static_cast<std::int32_t>(decoded_sprite.value->sprite.y);
+    const auto sprite_max_x = sprite_min_x + static_cast<std::int32_t>(decoded_sprite.value->sprite.width);
+    const auto sprite_max_y = sprite_min_y + static_cast<std::int32_t>(decoded_sprite.value->sprite.height);
+
+    if (!bounds_initialized) {
+      min_x = sprite_min_x;
+      min_y = sprite_min_y;
+      max_x = sprite_max_x;
+      max_y = sprite_max_y;
+      bounds_initialized = true;
+    } else {
+      min_x = std::min(min_x, sprite_min_x);
+      min_y = std::min(min_y, sprite_min_y);
+      max_x = std::max(max_x, sprite_max_x);
+      max_y = std::max(max_y, sprite_max_y);
+    }
+
+    Pl8DecodedSprite decoded;
+    decoded.sprite_index = index;
+    decoded.sprite = decoded_sprite.value->sprite;
+    decoded.indexed_pixels = decoded_sprite.value->indexed_pixels;
+    decoded.rgba_image = rgba.value.value();
+    result.decoded_sprites.push_back(std::move(decoded));
+    report.composition_status = "composed";
+    result.sprite_reports.push_back(std::move(report));
+    has_composable = true;
+  }
+
+  result.decode_supported = all_supported;
+
+  if (!has_composable) {
+    return {.value = std::move(result)};
+  }
+
+  const auto span_width_i64 = static_cast<std::int64_t>(max_x) - static_cast<std::int64_t>(min_x);
+  const auto span_height_i64 = static_cast<std::int64_t>(max_y) - static_cast<std::int64_t>(min_y);
+  if (span_width_i64 <= 0 || span_height_i64 <= 0) {
+    return {.error = make_invalid_sprite_table_error(image_pl8_bytes.size(),
+                                                     image_pl8_bytes.size(),
+                                                     "PL8 sprite composition produced non-positive canvas bounds")};
+  }
+
+  constexpr std::int64_t kMaxComposeDimension = 4096;
+  if (span_width_i64 > kMaxComposeDimension || span_height_i64 > kMaxComposeDimension) {
+    return {.error = make_invalid_sprite_table_error(
+                image_pl8_bytes.size(),
+                image_pl8_bytes.size(),
+                "PL8 sprite composition exceeds bounded canvas dimensions (max 4096x4096)")};
+  }
+
+  const auto span_width = static_cast<std::size_t>(span_width_i64);
+  const auto span_height = static_cast<std::size_t>(span_height_i64);
+  if (span_width > (std::numeric_limits<std::size_t>::max() / span_height) ||
+      (span_width * span_height) > (std::numeric_limits<std::size_t>::max() / 4U)) {
+    return {.error = make_invalid_sprite_table_error(
+                image_pl8_bytes.size(),
+                image_pl8_bytes.size(),
+                "PL8 sprite composition exceeds bounded canvas pixel budget")};
+  }
+
+  RgbaImage composed;
+  composed.width = static_cast<std::uint16_t>(span_width);
+  composed.height = static_cast<std::uint16_t>(span_height);
+  composed.pixels_rgba.assign(span_width * span_height * 4U, 0);
+
+  for (const auto& decoded : result.decoded_sprites) {
+    const auto origin_x = static_cast<std::int32_t>(decoded.sprite.x) - min_x;
+    const auto origin_y = static_cast<std::int32_t>(decoded.sprite.y) - min_y;
+    const auto sprite_w = static_cast<std::size_t>(decoded.sprite.width);
+    const auto sprite_h = static_cast<std::size_t>(decoded.sprite.height);
+    for (std::size_t y = 0; y < sprite_h; ++y) {
+      for (std::size_t x = 0; x < sprite_w; ++x) {
+        const auto dst_x = static_cast<std::size_t>(origin_x + static_cast<std::int32_t>(x));
+        const auto dst_y = static_cast<std::size_t>(origin_y + static_cast<std::int32_t>(y));
+        const auto src_offset = (y * sprite_w + x) * 4U;
+        const auto dst_offset = (dst_y * span_width + dst_x) * 4U;
+        const auto alpha = decoded.rgba_image.pixels_rgba[src_offset + 3];
+        if (alpha == 0) {
+          continue;
+        }
+        composed.pixels_rgba[dst_offset] = decoded.rgba_image.pixels_rgba[src_offset];
+        composed.pixels_rgba[dst_offset + 1] = decoded.rgba_image.pixels_rgba[src_offset + 1];
+        composed.pixels_rgba[dst_offset + 2] = decoded.rgba_image.pixels_rgba[src_offset + 2];
+        composed.pixels_rgba[dst_offset + 3] = alpha;
+      }
+    }
+  }
+
+  result.composition = Pl8SpriteCompositionResult{
+      .bounds = {.min_x = min_x, .min_y = min_y, .max_x = max_x, .max_y = max_y},
+      .rgba_image = std::move(composed)};
+
+  return {.value = std::move(result)};
+}
+
 std::string format_pl8_sprite_table_report(const Pl8SpriteTableResource& resource, const std::size_t max_sprites) {
   std::ostringstream output;
   output << "# Caesar II Win95 PL8 Sprite-Table Report\n";
@@ -275,6 +433,35 @@ std::string format_pl8_sprite_table_report(const Pl8SpriteTableResource& resourc
   }
 
   if (resource.sprites.size() > count) {
+    output << "sprite_rows_truncated: yes\n";
+    output << "sprite_rows_shown: " << count << "\n";
+  }
+
+  return output.str();
+}
+
+std::string format_pl8_sprite_pair_multi_report(const Pl8SpritePairMultiDecodeResult& result,
+                                                const std::size_t max_sprites) {
+  std::ostringstream output;
+  output << "# Caesar II Win95 PL8 Sprite-Table Pair Report\n";
+  output << "sprite_decode_supported: " << (result.decode_supported ? "yes" : "no") << "\n";
+  output << "sprite_count: " << result.image_pl8.sprites.size() << "\n";
+  output << "decoded_sprite_count: " << result.decoded_sprites.size() << "\n";
+  output << "composed: " << (result.composition.has_value() ? "yes" : "no") << "\n";
+  if (result.composition.has_value()) {
+    output << "composed_bounds: min=(" << result.composition->bounds.min_x << "," << result.composition->bounds.min_y
+           << ") max=(" << result.composition->bounds.max_x << "," << result.composition->bounds.max_y << ")\n";
+    output << "composed_canvas: " << result.composition->rgba_image.width << "x" << result.composition->rgba_image.height
+           << "\n";
+  }
+
+  const auto count = std::min(max_sprites, result.sprite_reports.size());
+  for (std::size_t index = 0; index < count; ++index) {
+    const auto& report = result.sprite_reports[index];
+    output << "sprite[" << report.sprite_index << "]: decode=" << report.decode_status
+           << ", compose=" << report.composition_status << "\n";
+  }
+  if (result.sprite_reports.size() > count) {
     output << "sprite_rows_truncated: yes\n";
     output << "sprite_rows_shown: " << count << "\n";
   }
