@@ -11,6 +11,7 @@
 
 #include "romulus/data/binary_reader.h"
 #include "romulus/data/ilbm_image.h"
+#include "romulus/data/pl8_resource.h"
 
 namespace romulus::data {
 
@@ -73,6 +74,12 @@ struct Win95PackTextExtraction {
   std::string decoded_text;
   std::size_t line_count = 0;
   std::size_t character_count = 0;
+};
+
+struct Win95PackPl8Extraction {
+  Win95PackContainerEntry entry;
+  std::vector<std::uint8_t> payload_bytes;
+  Pl8Resource pl8;
 };
 
 struct Win95PackIlbmBatchEntryResult {
@@ -220,6 +227,14 @@ constexpr std::size_t k_default_win95_container_max_file_load_bytes = 64 * 1024 
     const Win95PackContainerResource& container,
     std::size_t entry_index);
 [[nodiscard]] ParseResult<Win95PackTextExtraction> extract_win95_pack_text_entry(
+    std::span<const std::uint8_t> container_bytes,
+    const Win95PackContainerResource& container,
+    std::size_t entry_index);
+[[nodiscard]] ParseResult<Win95PackPl8Extraction> extract_win95_pack_pl8_entry(
+    std::span<const std::byte> container_bytes,
+    const Win95PackContainerResource& container,
+    std::size_t entry_index);
+[[nodiscard]] ParseResult<Win95PackPl8Extraction> extract_win95_pack_pl8_entry(
     std::span<const std::uint8_t> container_bytes,
     const Win95PackContainerResource& container,
     std::size_t entry_index);
