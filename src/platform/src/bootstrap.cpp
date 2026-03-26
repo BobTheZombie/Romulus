@@ -1,7 +1,5 @@
 #include "romulus/platform/bootstrap.h"
 
-#include <array>
-
 #include "romulus/data/path_resolver.h"
 
 namespace romulus::platform {
@@ -65,6 +63,45 @@ std::optional<BootstrapAssetSelection> select_bootstrap_asset(const std::filesys
   }
 
   return std::nullopt;
+}
+
+std::filesystem::path forum_background_logical_path() {
+  return std::filesystem::path("data") / "forum.lbm";
+}
+
+std::vector<ForumOverlayAssetSpec> default_forum_overlay_specs() {
+  return {
+      {.image256_path = std::filesystem::path("data0") / "forum.256",
+       .palette_pl8_path = std::filesystem::path("data0") / "forum.pl8"},
+      {.image256_path = std::filesystem::path("data0") / "rat_back.256",
+       .palette_pl8_path = std::filesystem::path("data0") / "rat_back.pl8"},
+  };
+}
+
+std::optional<BootstrapAssetSelection> select_forum_background_asset(const std::filesystem::path& data_root) {
+  return resolve_candidate(data_root, forum_background_logical_path(), false);
+}
+
+std::optional<ForumOverlayAssetSelection> select_forum_overlay_asset(const std::filesystem::path& data_root,
+                                                                     const ForumOverlayAssetSpec& spec) {
+  const auto image_selection = resolve_candidate(data_root, spec.image256_path, false);
+  if (!image_selection.has_value()) {
+    return std::nullopt;
+  }
+
+  const auto palette_selection = resolve_candidate(data_root, spec.palette_pl8_path, false);
+  if (!palette_selection.has_value()) {
+    return std::nullopt;
+  }
+
+  ForumOverlayAssetSelection selection;
+  selection.image256_logical_path = spec.image256_path;
+  selection.image256_absolute_path = image_selection->absolute_path;
+  selection.palette_pl8_logical_path = spec.palette_pl8_path;
+  selection.palette_pl8_absolute_path = palette_selection->absolute_path;
+  selection.case_insensitive_resolution_attempted = image_selection->case_insensitive_resolution_attempted ||
+                                                    palette_selection->case_insensitive_resolution_attempted;
+  return selection;
 }
 
 }  // namespace romulus::platform

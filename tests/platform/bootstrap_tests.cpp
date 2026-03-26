@@ -96,6 +96,55 @@ int test_select_bootstrap_asset_returns_empty_when_no_candidates_exist() {
   return rc;
 }
 
+int test_select_forum_background_asset_uses_forum_lbm_path() {
+  const auto root = make_temp_dir("forum-background");
+  write_file(root / "DATA" / "FORUM.LBM");
+
+  const auto selected = romulus::platform::select_forum_background_asset(root);
+  const int rc = assert_true(selected.has_value() &&
+                                 selected->logical_path == std::filesystem::path("data/forum.lbm") &&
+                                 selected->absolute_path.filename() == "FORUM.LBM",
+                             "forum background should resolve DATA/FORUM.LBM");
+
+  std::filesystem::remove_all(root);
+  return rc;
+}
+
+int test_default_forum_overlay_specs_have_expected_order() {
+  const auto overlays = romulus::platform::default_forum_overlay_specs();
+  return assert_true(overlays.size() == 2 &&
+                         overlays[0].image256_path == std::filesystem::path("data0/forum.256") &&
+                         overlays[0].palette_pl8_path == std::filesystem::path("data0/forum.pl8") &&
+                         overlays[1].image256_path == std::filesystem::path("data0/rat_back.256") &&
+                         overlays[1].palette_pl8_path == std::filesystem::path("data0/rat_back.pl8"),
+                     "forum overlays should be hardcoded in FORUM then RAT_BACK order");
+}
+
+int test_select_forum_overlay_asset_requires_both_files() {
+  const auto root = make_temp_dir("forum-overlay");
+  write_file(root / "DATA0" / "FORUM.256");
+  write_file(root / "DATA0" / "FORUM.PL8");
+
+  const romulus::platform::ForumOverlayAssetSpec spec{
+      .image256_path = std::filesystem::path("data0/forum.256"),
+      .palette_pl8_path = std::filesystem::path("data0/forum.pl8"),
+  };
+
+  const auto selected = romulus::platform::select_forum_overlay_asset(root, spec);
+  int rc = assert_true(selected.has_value() &&
+                           selected->image256_absolute_path.filename() == "FORUM.256" &&
+                           selected->palette_pl8_absolute_path.filename() == "FORUM.PL8",
+                       "forum overlay should resolve both .256 and .PL8 files");
+
+  std::filesystem::remove(root / "DATA0" / "FORUM.PL8");
+  const auto missing_palette = romulus::platform::select_forum_overlay_asset(root, spec);
+  rc |= assert_true(!missing_palette.has_value(),
+                    "forum overlay selection should fail when either required file is missing");
+
+  std::filesystem::remove_all(root);
+  return rc;
+}
+
 }  // namespace
 
 int main() {
@@ -116,6 +165,18 @@ int main() {
   }
 
   if (test_select_bootstrap_asset_returns_empty_when_no_candidates_exist() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_select_forum_background_asset_uses_forum_lbm_path() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_default_forum_overlay_specs_have_expected_order() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_select_forum_overlay_asset_requires_both_files() != 0) {
     return EXIT_FAILURE;
   }
 
