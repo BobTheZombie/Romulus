@@ -264,6 +264,37 @@ std::vector<std::uint8_t> make_pack_with_text_like_fixture() {
   return bytes;
 }
 
+std::vector<std::uint8_t> make_pack_with_text_batch_fixture() {
+  const std::vector<std::uint8_t> text_ok_a = {'A', 'l', 'p', 'h', 'a', '\n', '1', '\n'};
+  const std::vector<std::uint8_t> text_bad = {'B', 'A', 'D', '!', '\n', 0x1B, 'L', 'I', 'N', 'E'};
+  const std::vector<std::uint8_t> opaque = {0xFF, 0x00, 0x10, 0x20};
+  const std::vector<std::uint8_t> text_ok_b = {'B', 'e', 't', 'a', '\n', '2', '\n'};
+
+  std::vector<std::uint8_t> bytes;
+  bytes.insert(bytes.end(), {'P', 'A', 'C', 'K'});
+  append_u32_le(bytes, 4);
+  const std::uint32_t table_end = 8 + (4 * 8);
+  const std::uint32_t entry0 = table_end;
+  const std::uint32_t entry1 = entry0 + static_cast<std::uint32_t>(text_ok_a.size());
+  const std::uint32_t entry2 = entry1 + static_cast<std::uint32_t>(text_bad.size());
+  const std::uint32_t entry3 = entry2 + static_cast<std::uint32_t>(opaque.size());
+
+  append_u32_le(bytes, entry0);
+  append_u32_le(bytes, static_cast<std::uint32_t>(text_ok_a.size()));
+  append_u32_le(bytes, entry1);
+  append_u32_le(bytes, static_cast<std::uint32_t>(text_bad.size()));
+  append_u32_le(bytes, entry2);
+  append_u32_le(bytes, static_cast<std::uint32_t>(opaque.size()));
+  append_u32_le(bytes, entry3);
+  append_u32_le(bytes, static_cast<std::uint32_t>(text_ok_b.size()));
+
+  bytes.insert(bytes.end(), text_ok_a.begin(), text_ok_a.end());
+  bytes.insert(bytes.end(), text_bad.begin(), text_bad.end());
+  bytes.insert(bytes.end(), opaque.begin(), opaque.end());
+  bytes.insert(bytes.end(), text_ok_b.begin(), text_ok_b.end());
+  return bytes;
+}
+
 int test_parse_valid_pack_container() {
   const auto bytes = make_valid_pack_fixture();
   const auto parsed = romulus::data::parse_win95_pack_container(bytes);
@@ -875,6 +906,115 @@ int test_extract_pack_text_export_path_behavior() {
                      "exported text file should preserve decoded text size");
 }
 
+int test_batch_analyzes_text_like_entries_and_groups_failures() {
+  const auto bytes = make_pack_with_text_batch_fixture();
+  const auto parsed = romulus::data::parse_win95_pack_container(bytes);
+  if (assert_true(parsed.ok(), "text batch test requires valid PACK parse") != 0) {
+    return 1;
+  }
+
+  const auto batch = romulus::data::analyze_win95_pack_text_batch(bytes, parsed.value.value(), 12);
+  if (assert_true(batch.total_entry_count == 4, "text batch should report total entries") != 0) {
+    return 1;
+  }
+  if (assert_true(batch.candidate_entry_count == 3, "text batch should analyze only text-like entries") != 0) {
+    return 1;
+  }
+  if (assert_true(batch.decoded_entry_count == 2, "text batch should count successful decodes") != 0) {
+    return 1;
+  }
+  if (assert_true(batch.failed_entry_count == 1, "text batch should count decode failures") != 0) {
+    return 1;
+  }
+  if (assert_true(batch.entry_results.size() == 3, "text batch results should be deterministic per text-like entry") != 0) {
+    return 1;
+  }
+  if (assert_true(batch.entry_results[0].entry_index == 0 && batch.entry_results[1].entry_index == 1 &&
+                      batch.entry_results[2].entry_index == 3,
+                  "text batch entry ordering should remain entry-index ordered") != 0) {
+    return 1;
+  }
+  if (assert_true(!batch.failure_reason_frequencies.empty() &&
+                      batch.failure_reason_frequencies[0].signature.find("unsupported byte") != std::string::npos,
+                  "text batch should compact/group failure reasons") != 0) {
+    return 1;
+  }
+
+  const auto report = romulus::data::format_win95_pack_text_batch_report(
+      batch,
+      "DATA",
+      romulus::data::Win95PackTextBatchReportOptions{
+          .preview_entry_limit = 2,
+      });
+  if (assert_true(report.find("# Caesar II Win95 PACK Text Batch Report") != std::string::npos,
+                  "text batch report title should be stable") != 0) {
+    return 1;
+  }
+  return assert_true(report.find("text_entries_preview_truncated: yes") != std::string::npos,
+                     "text batch report should include deterministic truncation state");
+}
+
+int test_builds_pack_text_success_index_and_report() {
+  const auto bytes = make_pack_with_text_batch_fixture();
+  const auto parsed = romulus::data::parse_win95_pack_container(bytes);
+  if (assert_true(parsed.ok(), "text index test requires valid PACK parse") != 0) {
+    return 1;
+  }
+
+  const auto batch = romulus::data::analyze_win95_pack_text_batch(bytes, parsed.value.value(), 10);
+  const auto index = romulus::data::build_win95_pack_text_success_index(batch);
+  if (assert_true(index.successful_entry_count == 2, "text index should include only successful entries") != 0) {
+    return 1;
+  }
+  if (assert_true(index.successful_entries[0].entry_index == 0 && index.successful_entries[1].entry_index == 3,
+                  "text index should preserve deterministic entry ordering") != 0) {
+    return 1;
+  }
+
+  const auto report = romulus::data::format_win95_pack_text_index_report(
+      index,
+      "DATA",
+      romulus::data::Win95PackTextIndexReportOptions{
+          .preview_entry_limit = 1,
+      });
+  if (assert_true(report.find("# Caesar II Win95 PACK Text Success Index Report") != std::string::npos,
+                  "text index report title should be stable") != 0) {
+    return 1;
+  }
+  return assert_true(report.find("successful_entries_preview_truncated: yes") != std::string::npos,
+                     "text index report should expose deterministic truncation state");
+}
+
+int test_pack_text_index_lookup_and_export_rules() {
+  const auto bytes = make_pack_with_text_batch_fixture();
+  const auto parsed = romulus::data::parse_win95_pack_container(bytes);
+  if (assert_true(parsed.ok(), "text lookup test requires valid PACK parse") != 0) {
+    return 1;
+  }
+
+  const auto batch = romulus::data::analyze_win95_pack_text_batch(bytes, parsed.value.value(), 32);
+  const auto index = romulus::data::build_win95_pack_text_success_index(batch);
+
+  const auto failed_lookup = romulus::data::find_win95_pack_text_index_entry(index, 1);
+  if (assert_true(!failed_lookup.has_value(), "failed text entries should not be present in success index") != 0) {
+    return 1;
+  }
+  const auto invalid_lookup = romulus::data::find_win95_pack_text_index_entry(index, 99);
+  if (assert_true(!invalid_lookup.has_value(), "invalid text entry index should not resolve in success index") != 0) {
+    return 1;
+  }
+  const auto success_lookup = romulus::data::find_win95_pack_text_index_entry(index, 3);
+  if (assert_true(success_lookup.has_value(), "successful text entries should be index-exportable") != 0) {
+    return 1;
+  }
+
+  const auto failed_extract = romulus::data::extract_win95_pack_text_entry(bytes, parsed.value.value(), 1);
+  if (assert_true(!failed_extract.ok(), "non-decodable text-like entries should fail export extraction") != 0) {
+    return 1;
+  }
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -967,6 +1107,18 @@ int main() {
   }
 
   if (test_extract_pack_text_export_path_behavior() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_batch_analyzes_text_like_entries_and_groups_failures() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_builds_pack_text_success_index_and_report() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_pack_text_index_lookup_and_export_rules() != 0) {
     return EXIT_FAILURE;
   }
 

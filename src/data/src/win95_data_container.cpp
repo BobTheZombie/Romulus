@@ -39,10 +39,15 @@ namespace {
 
 [[nodiscard]] std::string compact_failure_reason(std::string_view message) {
   constexpr std::string_view kPrefix = "failed ILBM validation: ";
+  constexpr std::string_view kTextPrefix = "failed text validation: ";
   constexpr std::string_view kProbePrefix = "PACK entry ";
   const auto validation_index = message.find(kPrefix);
   if (validation_index != std::string_view::npos) {
     return std::string(message.substr(validation_index + kPrefix.size()));
+  }
+  const auto text_validation_index = message.find(kTextPrefix);
+  if (text_validation_index != std::string_view::npos) {
+    return std::string(message.substr(text_validation_index + kTextPrefix.size()));
   }
 
   const auto colon_index = message.find(": ");
@@ -578,6 +583,72 @@ Win95PackIlbmBatchResult analyze_win95_pack_ilbm_batch(std::span<const std::uint
       container);
 }
 
+Win95PackTextBatchResult analyze_win95_pack_text_batch(std::span<const std::byte> container_bytes,
+                                                        const Win95PackContainerResource& container,
+                                                        const std::size_t preview_character_limit) {
+  Win95PackTextBatchResult result;
+  result.total_entry_count = container.entries.size();
+  std::map<std::string, std::size_t> failure_counts;
+
+  for (const auto& entry : container.entries) {
+    if (entry.classification_hint != "text-like") {
+      continue;
+    }
+
+    ++result.candidate_entry_count;
+    Win95PackTextBatchEntryResult entry_result{
+        .entry_index = entry.index,
+        .offset = entry.offset,
+        .size = entry.size,
+        .classification_hint = entry.classification_hint,
+    };
+
+    const auto extracted = extract_win95_pack_text_entry(container_bytes, container, entry.index);
+    if (!extracted.ok()) {
+      ++result.failed_entry_count;
+      entry_result.decode_success = false;
+      const auto reason = compact_failure_reason(extracted.error->message);
+      entry_result.failure_reason = reason;
+      ++failure_counts[reason];
+      result.entry_results.push_back(std::move(entry_result));
+      continue;
+    }
+
+    ++result.decoded_entry_count;
+    entry_result.decode_success = true;
+    entry_result.line_count = extracted.value->line_count;
+    entry_result.character_count = extracted.value->character_count;
+    bool truncated = false;
+    entry_result.text_preview = make_text_preview(extracted.value->decoded_text, preview_character_limit, &truncated);
+    result.entry_results.push_back(std::move(entry_result));
+  }
+
+  result.failure_reason_frequencies.reserve(failure_counts.size());
+  for (const auto& [reason, count] : failure_counts) {
+    result.failure_reason_frequencies.push_back(Win95PackMagicFrequency{
+        .signature = reason,
+        .count = count,
+    });
+  }
+  std::stable_sort(result.failure_reason_frequencies.begin(), result.failure_reason_frequencies.end(), [](const auto& left, const auto& right) {
+    if (left.count != right.count) {
+      return left.count > right.count;
+    }
+    return left.signature < right.signature;
+  });
+
+  return result;
+}
+
+Win95PackTextBatchResult analyze_win95_pack_text_batch(std::span<const std::uint8_t> container_bytes,
+                                                        const Win95PackContainerResource& container,
+                                                        const std::size_t preview_character_limit) {
+  return analyze_win95_pack_text_batch(
+      std::span<const std::byte>(reinterpret_cast<const std::byte*>(container_bytes.data()), container_bytes.size()),
+      container,
+      preview_character_limit);
+}
+
 Win95PackIlbmIndex build_win95_pack_ilbm_success_index(const Win95PackIlbmBatchResult& batch_result) {
   Win95PackIlbmIndex index;
   index.total_entry_count = batch_result.total_entry_count;
@@ -603,7 +674,43 @@ Win95PackIlbmIndex build_win95_pack_ilbm_success_index(const Win95PackIlbmBatchR
   return index;
 }
 
+Win95PackTextIndex build_win95_pack_text_success_index(const Win95PackTextBatchResult& batch_result) {
+  Win95PackTextIndex index;
+  index.total_entry_count = batch_result.total_entry_count;
+  index.candidate_entry_count = batch_result.candidate_entry_count;
+
+  for (const auto& entry_result : batch_result.entry_results) {
+    if (!entry_result.decode_success) {
+      continue;
+    }
+
+    index.successful_entries.push_back(Win95PackTextIndexEntry{
+        .entry_index = entry_result.entry_index,
+        .offset = entry_result.offset,
+        .size = entry_result.size,
+        .line_count = entry_result.line_count.value_or(0),
+        .character_count = entry_result.character_count.value_or(0),
+        .classification_hint = entry_result.classification_hint,
+        .text_preview = entry_result.text_preview.value_or(""),
+    });
+  }
+
+  index.successful_entry_count = index.successful_entries.size();
+  return index;
+}
+
 std::optional<Win95PackIlbmIndexEntry> find_win95_pack_ilbm_index_entry(const Win95PackIlbmIndex& index,
+                                                                         const std::size_t entry_index) {
+  for (const auto& entry : index.successful_entries) {
+    if (entry.entry_index == entry_index) {
+      return entry;
+    }
+  }
+
+  return std::nullopt;
+}
+
+std::optional<Win95PackTextIndexEntry> find_win95_pack_text_index_entry(const Win95PackTextIndex& index,
                                                                          const std::size_t entry_index) {
   for (const auto& entry : index.successful_entries) {
     if (entry.entry_index == entry_index) {
@@ -761,6 +868,93 @@ std::string format_win95_pack_ilbm_index_report(const Win95PackIlbmIndex& index,
            << " width=" << entry.width
            << " height=" << entry.height
            << " palette_colors=" << entry.palette_color_count.value_or(0)
+           << "\n";
+  }
+
+  if (entry_limit < index.successful_entries.size()) {
+    output << "successful_entries_preview_truncated: yes\n";
+  }
+
+  return output.str();
+}
+
+std::string format_win95_pack_text_batch_report(const Win95PackTextBatchResult& result,
+                                                std::string_view source_label,
+                                                const Win95PackTextBatchReportOptions options) {
+  std::ostringstream output;
+  output << "# Caesar II Win95 PACK Text Batch Report\n";
+  if (!source_label.empty()) {
+    output << "source: " << source_label << "\n";
+  }
+
+  output << "total_entries: " << result.total_entry_count << "\n";
+  output << "text_like_entries: " << result.candidate_entry_count << "\n";
+  output << "decoded_text_entries: " << result.decoded_entry_count << "\n";
+  output << "failed_text_entries: " << result.failed_entry_count << "\n";
+
+  output << "failure_reasons:\n";
+  if (result.failure_reason_frequencies.empty()) {
+    output << "  - (none)\n";
+  } else {
+    for (const auto& frequency : result.failure_reason_frequencies) {
+      output << "  - reason: " << frequency.signature << " count=" << frequency.count << "\n";
+    }
+  }
+
+  const auto entry_limit = options.include_all_entries
+                               ? result.entry_results.size()
+                               : std::min<std::size_t>(options.preview_entry_limit, result.entry_results.size());
+  output << "text_entries_preview: showing " << entry_limit << " of " << result.entry_results.size() << "\n";
+  for (std::size_t current = 0; current < entry_limit; ++current) {
+    const auto& entry = result.entry_results[current];
+    output << "  - index: " << entry.entry_index
+           << " offset=" << entry.offset
+           << " size=" << entry.size
+           << " class=" << entry.classification_hint
+           << " status=" << (entry.decode_success ? "decoded" : "failed");
+    if (entry.decode_success) {
+      output << " lines=" << entry.line_count.value_or(0)
+             << " chars=" << entry.character_count.value_or(0)
+             << " preview=" << entry.text_preview.value_or("");
+    } else {
+      output << " reason=" << entry.failure_reason.value_or("unknown");
+    }
+    output << "\n";
+  }
+
+  if (entry_limit < result.entry_results.size()) {
+    output << "text_entries_preview_truncated: yes\n";
+  }
+
+  return output.str();
+}
+
+std::string format_win95_pack_text_index_report(const Win95PackTextIndex& index,
+                                                std::string_view source_label,
+                                                const Win95PackTextIndexReportOptions options) {
+  std::ostringstream output;
+  output << "# Caesar II Win95 PACK Text Success Index Report\n";
+  if (!source_label.empty()) {
+    output << "source: " << source_label << "\n";
+  }
+
+  output << "total_entries: " << index.total_entry_count << "\n";
+  output << "text_like_entries: " << index.candidate_entry_count << "\n";
+  output << "successful_text_entries: " << index.successful_entry_count << "\n";
+
+  const auto entry_limit = options.include_all_entries
+                               ? index.successful_entries.size()
+                               : std::min<std::size_t>(options.preview_entry_limit, index.successful_entries.size());
+  output << "successful_entries_preview: showing " << entry_limit << " of " << index.successful_entries.size() << "\n";
+  for (std::size_t current = 0; current < entry_limit; ++current) {
+    const auto& entry = index.successful_entries[current];
+    output << "  - index: " << entry.entry_index
+           << " offset=" << entry.offset
+           << " size=" << entry.size
+           << " class=" << entry.classification_hint
+           << " lines=" << entry.line_count
+           << " chars=" << entry.character_count
+           << " preview=" << entry.text_preview
            << "\n";
   }
 
