@@ -11,6 +11,11 @@ struct ParsedLargePl8Header {
   std::uint16_t height = 0;
 };
 
+struct DecodedRgbaFromIndexed {
+  Pl8Resource palette_256;
+  RgbaImage rgba_image;
+};
+
 [[nodiscard]] ParseError make_invalid_pl8_image_error(std::size_t requested_bytes,
                                                        std::size_t buffer_size,
                                                        const std::string& message) {
@@ -73,6 +78,46 @@ void copy_preview(const std::span<const std::byte> bytes,
   }
 }
 
+[[nodiscard]] ParseResult<DecodedRgbaFromIndexed> decode_indexed_with_256_palette(
+    const std::vector<std::uint8_t>& indexed_pixels,
+    const std::uint16_t width,
+    const std::uint16_t height,
+    std::span<const std::uint8_t> palette_256_bytes,
+    const bool index_zero_transparent) {
+  const auto parsed_palette = parse_pl8_resource(palette_256_bytes);
+  if (!parsed_palette.ok()) {
+    return {.error = parsed_palette.error};
+  }
+
+  PaletteResource palette;
+  palette.entries.reserve(parsed_palette.value->palette_entries.size());
+  for (const auto& entry : parsed_palette.value->palette_entries) {
+    if (entry.red > 63 || entry.green > 63 || entry.blue > 63) {
+      return {.error = make_invalid_pl8_image_error(
+                  parsed_palette.value->payload_size,
+                  parsed_palette.value->payload_size,
+                  ".256 palette entry exceeds supported 6-bit component range for indexed conversion")};
+    }
+
+    palette.entries.push_back(entry);
+  }
+
+  IndexedImageResource indexed;
+  indexed.width = width;
+  indexed.height = height;
+  indexed.indexed_pixels = indexed_pixels;
+
+  const auto rgba = apply_palette_to_indexed_image(indexed, palette, index_zero_transparent);
+  if (!rgba.ok()) {
+    return {.error = rgba.error};
+  }
+
+  DecodedRgbaFromIndexed decoded;
+  decoded.palette_256 = parsed_palette.value.value();
+  decoded.rgba_image = rgba.value.value();
+  return {.value = std::move(decoded)};
+}
+
 }  // namespace
 
 ParseResult<Pl8ImageResource> parse_caesar2_forum_pl8_image(std::span<const std::byte> bytes) {
@@ -124,6 +169,146 @@ ParseResult<Pl8ImageResource> parse_caesar2_forum_pl8_image(std::span<const std:
 
 ParseResult<Pl8ImageResource> parse_caesar2_forum_pl8_image(std::span<const std::uint8_t> bytes) {
   return parse_caesar2_forum_pl8_image(
+      std::span<const std::byte>(reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()));
+}
+
+ParseResult<StructuredPl8Resource> parse_caesar2_rat_back_structured_pl8_image(std::span<const std::byte> bytes) {
+  const auto parsed_header = parse_large_pl8_common_header(bytes);
+  if (!parsed_header.ok()) {
+    if (parsed_header.error->message.find("Unsupported large-PL8 image layout") != std::string::npos) {
+      std::ostringstream message;
+      message << "Unsupported RAT_BACK-style structured PL8 image layout: expected at least header_size="
+              << Pl8ImageResource::kHeaderSize << " bytes, got " << bytes.size();
+      return {.error = make_invalid_pl8_image_error(Pl8ImageResource::kHeaderSize, bytes.size(), message.str())};
+    }
+    return {.error = parsed_header.error};
+  }
+
+  const auto width = parsed_header.value->width;
+  const auto height = parsed_header.value->height;
+  if (width < Pl8ImageResource::kMinSupportedDimension || height < Pl8ImageResource::kMinSupportedDimension ||
+      width > Pl8ImageResource::kMaxSupportedDimension || height > Pl8ImageResource::kMaxSupportedDimension) {
+    std::ostringstream message;
+    message << "Unsupported RAT_BACK-style structured PL8 image layout: dimensions out of supported bounds (" << width
+            << "x" << height << "), allowed range=[" << Pl8ImageResource::kMinSupportedDimension << ".."
+            << Pl8ImageResource::kMaxSupportedDimension << "]";
+    return {.error = make_invalid_pl8_image_error(bytes.size(), bytes.size(), message.str())};
+  }
+
+  const auto payload_size = bytes.size() - Pl8ImageResource::kHeaderSize;
+  if (payload_size < StructuredPl8Resource::kStructuredPrefixSize) {
+    std::ostringstream message;
+    message << "RAT_BACK-style structured payload too small: requires prefix_size="
+            << StructuredPl8Resource::kStructuredPrefixSize << " bytes, payload_bytes_after_header=" << payload_size;
+    return {.error = make_invalid_pl8_image_error(StructuredPl8Resource::kStructuredPrefixSize, payload_size, message.str())};
+  }
+
+  StructuredPl8Resource parsed;
+  parsed.header_size = Pl8ImageResource::kHeaderSize;
+  parsed.payload_offset = Pl8ImageResource::kHeaderSize;
+  parsed.width = width;
+  parsed.height = height;
+  parsed.payload_size = payload_size;
+  parsed.expected_image_size = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+
+  BinaryReader reader(bytes);
+  if (const auto seek_prefix_error = reader.seek(parsed.payload_offset); seek_prefix_error.has_value()) {
+    return {.error = seek_prefix_error};
+  }
+
+  constexpr std::size_t kPrefixFieldCount = StructuredPl8Resource::kStructuredPrefixSize / sizeof(std::uint32_t);
+  parsed.prefix_fields.reserve(kPrefixFieldCount);
+  for (std::size_t field_index = 0; field_index < kPrefixFieldCount; ++field_index) {
+    const auto field = reader.read_u32_le();
+    if (!field.ok()) {
+      return {.error = field.error};
+    }
+
+    parsed.prefix_fields.push_back({.index = field_index, .value = field.value.value()});
+  }
+
+  const auto bounded_payload_start = parsed.payload_offset + StructuredPl8Resource::kStructuredPrefixSize;
+  const auto bounded_payload_size = parsed.payload_size - StructuredPl8Resource::kStructuredPrefixSize;
+  for (std::size_t offset_field_index = 0; offset_field_index < parsed.prefix_fields.size(); ++offset_field_index) {
+    for (std::size_t size_field_index = 0; size_field_index < parsed.prefix_fields.size(); ++size_field_index) {
+      StructuredPl8CandidateRegion candidate;
+      candidate.offset_field_index = offset_field_index;
+      candidate.size_field_index = size_field_index;
+      candidate.payload_offset = static_cast<std::size_t>(parsed.prefix_fields[offset_field_index].value);
+      candidate.payload_size = static_cast<std::size_t>(parsed.prefix_fields[size_field_index].value);
+
+      if (candidate.payload_size != parsed.expected_image_size) {
+        candidate.reason = "size_field_does_not_match_width_times_height";
+        parsed.candidate_regions.push_back(std::move(candidate));
+        continue;
+      }
+
+      if (candidate.payload_offset < StructuredPl8Resource::kStructuredPrefixSize) {
+        candidate.reason = "offset_points_into_structured_prefix";
+        parsed.candidate_regions.push_back(std::move(candidate));
+        continue;
+      }
+
+      if (candidate.payload_offset > parsed.payload_size) {
+        candidate.reason = "offset_out_of_payload_bounds";
+        parsed.candidate_regions.push_back(std::move(candidate));
+        continue;
+      }
+
+      if (candidate.payload_size > parsed.payload_size || candidate.payload_offset + candidate.payload_size > parsed.payload_size) {
+        candidate.reason = "candidate_range_out_of_payload_bounds";
+        parsed.candidate_regions.push_back(std::move(candidate));
+        continue;
+      }
+
+      const auto absolute_offset = parsed.payload_offset + candidate.payload_offset;
+      if (absolute_offset < bounded_payload_start ||
+          absolute_offset + candidate.payload_size > bounded_payload_start + bounded_payload_size) {
+        candidate.reason = "candidate_range_violates_bounded_structured_region";
+        parsed.candidate_regions.push_back(std::move(candidate));
+        continue;
+      }
+
+      candidate.accepted = true;
+      candidate.reason = "accepted";
+      parsed.candidate_regions.push_back(std::move(candidate));
+    }
+  }
+
+  std::vector<StructuredPl8CandidateRegion> accepted_candidates;
+  for (const auto& candidate : parsed.candidate_regions) {
+    if (candidate.accepted) {
+      accepted_candidates.push_back(candidate);
+    }
+  }
+
+  if (accepted_candidates.empty()) {
+    std::ostringstream message;
+    message << "RAT_BACK-style structured PL8 did not yield a deterministic image region: expected exactly one accepted "
+               "candidate with size=width*height ("
+            << parsed.expected_image_size << "), got accepted_candidates=0";
+    return {.error = make_invalid_pl8_image_error(parsed.expected_image_size, parsed.payload_size, message.str())};
+  }
+
+  if (accepted_candidates.size() != 1) {
+    std::ostringstream message;
+    message << "RAT_BACK-style structured PL8 ambiguous image region: accepted_candidates=" << accepted_candidates.size()
+            << " (requires exactly 1 deterministic candidate)";
+    return {.error = make_invalid_pl8_image_error(parsed.expected_image_size, parsed.payload_size, message.str())};
+  }
+
+  parsed.selected_region = accepted_candidates.front();
+  parsed.indexed_pixels.reserve(parsed.expected_image_size);
+  const auto absolute_offset = parsed.payload_offset + parsed.selected_region->payload_offset;
+  for (std::size_t index = 0; index < parsed.expected_image_size; ++index) {
+    parsed.indexed_pixels.push_back(std::to_integer<std::uint8_t>(bytes[absolute_offset + index]));
+  }
+
+  return {.value = std::move(parsed)};
+}
+
+ParseResult<StructuredPl8Resource> parse_caesar2_rat_back_structured_pl8_image(std::span<const std::uint8_t> bytes) {
+  return parse_caesar2_rat_back_structured_pl8_image(
       std::span<const std::byte>(reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()));
 }
 
@@ -193,38 +378,44 @@ ParseResult<Pl8Image256PairDecodeResult> decode_caesar2_forum_pl8_image_pair(
     return {.error = parsed_image.error};
   }
 
-  const auto parsed_palette = parse_pl8_resource(palette_256_bytes);
-  if (!parsed_palette.ok()) {
-    return {.error = parsed_palette.error};
-  }
-
-  PaletteResource palette;
-  palette.entries.reserve(parsed_palette.value->palette_entries.size());
-  for (const auto& entry : parsed_palette.value->palette_entries) {
-    if (entry.red > 63 || entry.green > 63 || entry.blue > 63) {
-      return {.error = make_invalid_pl8_image_error(
-                  parsed_palette.value->payload_size,
-                  parsed_palette.value->payload_size,
-                  ".256 palette entry exceeds supported 6-bit component range for indexed conversion")};
-    }
-
-    palette.entries.push_back(entry);
-  }
-
-  IndexedImageResource indexed;
-  indexed.width = parsed_image.value->width;
-  indexed.height = parsed_image.value->height;
-  indexed.indexed_pixels = parsed_image.value->indexed_pixels;
-
-  const auto rgba = apply_palette_to_indexed_image(indexed, palette, index_zero_transparent);
-  if (!rgba.ok()) {
-    return {.error = rgba.error};
+  const auto decoded_indexed = decode_indexed_with_256_palette(parsed_image.value->indexed_pixels,
+                                                               parsed_image.value->width,
+                                                               parsed_image.value->height,
+                                                               palette_256_bytes,
+                                                               index_zero_transparent);
+  if (!decoded_indexed.ok()) {
+    return {.error = decoded_indexed.error};
   }
 
   Pl8Image256PairDecodeResult decoded;
   decoded.image_pl8 = parsed_image.value.value();
-  decoded.palette_256 = parsed_palette.value.value();
-  decoded.rgba_image = rgba.value.value();
+  decoded.palette_256 = decoded_indexed.value->palette_256;
+  decoded.rgba_image = decoded_indexed.value->rgba_image;
+  return {.value = std::move(decoded)};
+}
+
+ParseResult<StructuredPl8Image256PairDecodeResult> decode_caesar2_rat_back_structured_pl8_image_pair(
+    std::span<const std::uint8_t> image_pl8_bytes,
+    std::span<const std::uint8_t> palette_256_bytes,
+    const bool index_zero_transparent) {
+  const auto parsed_image = parse_caesar2_rat_back_structured_pl8_image(image_pl8_bytes);
+  if (!parsed_image.ok()) {
+    return {.error = parsed_image.error};
+  }
+
+  const auto decoded_indexed = decode_indexed_with_256_palette(parsed_image.value->indexed_pixels,
+                                                               parsed_image.value->width,
+                                                               parsed_image.value->height,
+                                                               palette_256_bytes,
+                                                               index_zero_transparent);
+  if (!decoded_indexed.ok()) {
+    return {.error = decoded_indexed.error};
+  }
+
+  StructuredPl8Image256PairDecodeResult decoded;
+  decoded.image_pl8 = parsed_image.value.value();
+  decoded.palette_256 = decoded_indexed.value->palette_256;
+  decoded.rgba_image = decoded_indexed.value->rgba_image;
   return {.value = std::move(decoded)};
 }
 
@@ -252,6 +443,43 @@ std::string format_pl8_image_report(const Pl8ImageResource& image, const std::si
     output << "... (" << (image.indexed_pixels.size() - count) << " more pixels)\n";
   }
 
+  return output.str();
+}
+
+std::string format_pl8_structured_report(const StructuredPl8Resource& image) {
+  std::ostringstream output;
+  output << "# Caesar II Win95 RAT_BACK-style Structured PL8 Report\n";
+  output << "supported_layout: rat_back_structured_pl8_24b_header\n";
+  output << "header_size: " << image.header_size << "\n";
+  output << "payload_offset: " << image.payload_offset << "\n";
+  output << "width: " << image.width << "\n";
+  output << "height: " << image.height << "\n";
+  output << "payload_size: " << image.payload_size << "\n";
+  output << "payload_expected_from_dimensions: " << image.expected_image_size << "\n";
+  output << "prefix_field_count: " << image.prefix_fields.size() << "\n";
+  output << "prefix_fields:\n";
+  for (const auto& field : image.prefix_fields) {
+    output << "  - field_" << field.index << "_u32le: " << field.value << "\n";
+  }
+
+  output << "candidate_regions:\n";
+  for (const auto& candidate : image.candidate_regions) {
+    output << "  - offset_field: field_" << candidate.offset_field_index << "\n";
+    output << "    size_field: field_" << candidate.size_field_index << "\n";
+    output << "    payload_offset: " << candidate.payload_offset << "\n";
+    output << "    payload_size: " << candidate.payload_size << "\n";
+    output << "    accepted: " << (candidate.accepted ? "yes" : "no") << "\n";
+    output << "    reason: " << candidate.reason << "\n";
+  }
+
+  output << "primary_image_region_identified: " << (image.selected_region.has_value() ? "yes" : "no") << "\n";
+  if (image.selected_region.has_value()) {
+    output << "selected_region_offset: " << image.selected_region->payload_offset << "\n";
+    output << "selected_region_size: " << image.selected_region->payload_size << "\n";
+    output << "decode_status: " << (image.indexed_pixels.size() == image.expected_image_size ? "decoded" : "failed") << "\n";
+  } else {
+    output << "decode_status: failed\n";
+  }
   return output.str();
 }
 
