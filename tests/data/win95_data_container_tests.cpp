@@ -295,6 +295,35 @@ std::vector<std::uint8_t> make_pack_with_text_batch_fixture() {
   return bytes;
 }
 
+std::vector<std::uint8_t> make_pl8_payload_fixture() {
+  std::vector<std::uint8_t> bytes;
+  bytes.reserve(romulus::data::Pl8Resource::kSupportedPayloadSize);
+  for (std::size_t index = 0; index < romulus::data::Pl8Resource::kSupportedEntryCount; ++index) {
+    bytes.push_back(static_cast<std::uint8_t>(index & 0xFFU));
+    bytes.push_back(static_cast<std::uint8_t>((index * 3U) & 0xFFU));
+    bytes.push_back(static_cast<std::uint8_t>((255U - index) & 0xFFU));
+  }
+  return bytes;
+}
+
+std::vector<std::uint8_t> make_pack_with_pl8_fixture() {
+  const auto pl8_payload = make_pl8_payload_fixture();
+  const std::vector<std::uint8_t> opaque_payload = {0x12, 0x34, 0x56, 0x78};
+  std::vector<std::uint8_t> bytes;
+  bytes.insert(bytes.end(), {'P', 'A', 'C', 'K'});
+  append_u32_le(bytes, 2);
+  const std::uint32_t table_end = 8 + (2 * 8);
+  const std::uint32_t entry0_offset = table_end;
+  const std::uint32_t entry1_offset = entry0_offset + static_cast<std::uint32_t>(pl8_payload.size());
+  append_u32_le(bytes, entry0_offset);
+  append_u32_le(bytes, static_cast<std::uint32_t>(pl8_payload.size()));
+  append_u32_le(bytes, entry1_offset);
+  append_u32_le(bytes, static_cast<std::uint32_t>(opaque_payload.size()));
+  bytes.insert(bytes.end(), pl8_payload.begin(), pl8_payload.end());
+  bytes.insert(bytes.end(), opaque_payload.begin(), opaque_payload.end());
+  return bytes;
+}
+
 int test_parse_valid_pack_container() {
   const auto bytes = make_valid_pack_fixture();
   const auto parsed = romulus::data::parse_win95_pack_container(bytes);
@@ -1015,6 +1044,107 @@ int test_pack_text_index_lookup_and_export_rules() {
   return 0;
 }
 
+int test_extract_pack_pl8_entry_success_and_stable_report() {
+  const auto bytes = make_pack_with_pl8_fixture();
+  const auto parsed = romulus::data::parse_win95_pack_container(bytes);
+  if (assert_true(parsed.ok(), "pl8 extraction test requires valid PACK parse") != 0) {
+    return 1;
+  }
+
+  const auto extracted = romulus::data::extract_win95_pack_pl8_entry(bytes, parsed.value.value(), 0);
+  if (assert_true(extracted.ok(), "768-byte opaque payload should extract as supported PL8") != 0) {
+    return 1;
+  }
+  if (assert_true(extracted->pl8.palette_entries.size() == romulus::data::Pl8Resource::kSupportedEntryCount,
+                  "pack PL8 extraction should decode 256 palette entries") != 0) {
+    return 1;
+  }
+
+  const auto report = romulus::data::format_pl8_report(extracted->pl8, 2);
+  if (assert_true(report.find("# Caesar II Win95 PL8 Report") != std::string::npos,
+                  "pack PL8 probe should reuse stable PL8 report formatter") != 0) {
+    return 1;
+  }
+  return assert_true(report.find("palette_preview_count: 2") != std::string::npos,
+                     "pack PL8 report preview bound should be deterministic");
+}
+
+int test_extract_pack_pl8_entry_rejects_invalid_index() {
+  const auto bytes = make_pack_with_pl8_fixture();
+  const auto parsed = romulus::data::parse_win95_pack_container(bytes);
+  if (assert_true(parsed.ok(), "pack pl8 invalid index test requires valid PACK parse") != 0) {
+    return 1;
+  }
+
+  const auto extracted = romulus::data::extract_win95_pack_pl8_entry(bytes, parsed.value.value(), 9);
+  if (assert_true(!extracted.ok(), "invalid pl8 entry index should fail") != 0) {
+    return 1;
+  }
+  return assert_true(extracted.error->message.find("Invalid PACK entry index") != std::string::npos,
+                     "invalid pl8 index error should be explicit");
+}
+
+int test_extract_pack_pl8_entry_rejects_unsupported_family() {
+  const auto bytes = make_pack_with_pl8_fixture();
+  const auto parsed = romulus::data::parse_win95_pack_container(bytes);
+  if (assert_true(parsed.ok(), "pack pl8 family rejection test requires valid PACK parse") != 0) {
+    return 1;
+  }
+
+  const auto extracted = romulus::data::extract_win95_pack_pl8_entry(bytes, parsed.value.value(), 1);
+  if (assert_true(!extracted.ok(), "non-768-byte payload should remain unsupported for PL8 extraction") != 0) {
+    return 1;
+  }
+  return assert_true(extracted.error->message.find("unsupported for PL8 extraction") != std::string::npos,
+                     "unsupported pl8-like family failure should be explicit");
+}
+
+int test_extract_pack_pl8_entry_rejects_truncated_payload_bounds() {
+  const auto bytes = make_pack_with_pl8_fixture();
+  const auto parsed = romulus::data::parse_win95_pack_container(bytes);
+  if (assert_true(parsed.ok(), "pack pl8 truncated bounds test requires valid PACK parse") != 0) {
+    return 1;
+  }
+
+  std::vector<std::uint8_t> truncated = bytes;
+  truncated.resize(parsed->entries[0].end_offset - 1);
+  const auto extracted = romulus::data::extract_win95_pack_pl8_entry(truncated, parsed.value.value(), 0);
+  if (assert_true(!extracted.ok(), "truncated pl8 payload bounds should fail extraction") != 0) {
+    return 1;
+  }
+  return assert_true(extracted.error->message.find("exceeds container bounds") != std::string::npos,
+                     "truncated pl8 payload should report bounded extraction failure");
+}
+
+int test_extract_pack_pl8_entry_export_behavior() {
+  const auto bytes = make_pack_with_pl8_fixture();
+  const auto parsed = romulus::data::parse_win95_pack_container(bytes);
+  if (assert_true(parsed.ok(), "pack pl8 export behavior test requires valid PACK parse") != 0) {
+    return 1;
+  }
+
+  const auto extracted = romulus::data::extract_win95_pack_pl8_entry(bytes, parsed.value.value(), 0);
+  if (assert_true(extracted.ok(), "pack pl8 export behavior test requires successful extraction") != 0) {
+    return 1;
+  }
+
+  const auto output_path = std::filesystem::temp_directory_path() / "romulus_pack_pl8_export.pl8";
+  std::ofstream output(output_path, std::ios::out | std::ios::binary | std::ios::trunc);
+  if (assert_true(output.is_open(), "pack pl8 export path should open temporary file") != 0) {
+    return 1;
+  }
+  output.write(reinterpret_cast<const char*>(extracted->payload_bytes.data()),
+               static_cast<std::streamsize>(extracted->payload_bytes.size()));
+  output.close();
+  if (assert_true(std::filesystem::exists(output_path), "pack pl8 export should create output file") != 0) {
+    return 1;
+  }
+  const auto file_size = std::filesystem::file_size(output_path);
+  std::filesystem::remove(output_path);
+  return assert_true(file_size == romulus::data::Pl8Resource::kSupportedPayloadSize,
+                     "pack pl8 export file size should match bounded 768-byte payload");
+}
+
 }  // namespace
 
 int main() {
@@ -1119,6 +1249,26 @@ int main() {
   }
 
   if (test_pack_text_index_lookup_and_export_rules() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_extract_pack_pl8_entry_success_and_stable_report() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_extract_pack_pl8_entry_rejects_invalid_index() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_extract_pack_pl8_entry_rejects_unsupported_family() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_extract_pack_pl8_entry_rejects_truncated_payload_bounds() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_extract_pack_pl8_entry_export_behavior() != 0) {
     return EXIT_FAILURE;
   }
 

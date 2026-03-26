@@ -62,6 +62,19 @@ namespace {
   return (value >= 0x20 && value <= 0x7E) || value == '\n' || value == '\r' || value == '\t';
 }
 
+[[nodiscard]] bool is_supported_pl8_like_candidate(const Win95PackContainerEntry& entry) {
+  if (entry.size != Pl8Resource::kSupportedPayloadSize) {
+    return false;
+  }
+
+  if (entry.classification_hint == "possible-ilbm" || entry.classification_hint == "text-like" ||
+      entry.classification_hint == "empty") {
+    return false;
+  }
+
+  return true;
+}
+
 [[nodiscard]] std::size_t count_text_lines(std::string_view decoded_text) {
   if (decoded_text.empty()) {
     return 0;
@@ -516,6 +529,64 @@ ParseResult<Win95PackTextExtraction> extract_win95_pack_text_entry(std::span<con
                                                                    const Win95PackContainerResource& container,
                                                                    const std::size_t entry_index) {
   return extract_win95_pack_text_entry(
+      std::span<const std::byte>(reinterpret_cast<const std::byte*>(container_bytes.data()), container_bytes.size()),
+      container,
+      entry_index);
+}
+
+ParseResult<Win95PackPl8Extraction> extract_win95_pack_pl8_entry(std::span<const std::byte> container_bytes,
+                                                                  const Win95PackContainerResource& container,
+                                                                  const std::size_t entry_index) {
+  if (entry_index >= container.entries.size()) {
+    std::ostringstream message;
+    message << "Invalid PACK entry index " << entry_index << "; entry count=" << container.entries.size();
+    return {.error = make_invalid_container_error(0, 0, container_bytes.size(), message.str())};
+  }
+
+  const auto& entry = container.entries[entry_index];
+  if (!is_supported_pl8_like_candidate(entry)) {
+    std::ostringstream message;
+    message << "PACK entry " << entry_index
+            << " is unsupported for PL8 extraction (class=" << entry.classification_hint << ", size=" << entry.size
+            << "): expected opaque 768-byte palette-like payload";
+    return {.error = make_invalid_container_error(entry.offset, entry.size, container_bytes.size(), message.str())};
+  }
+
+  const auto end_offset = checked_add(entry.offset, entry.size);
+  if (!end_offset.has_value()) {
+    std::ostringstream message;
+    message << "PACK entry " << entry_index << " range overflows host size";
+    return {.error = make_invalid_container_error(entry.offset, entry.size, container_bytes.size(), message.str())};
+  }
+
+  if (end_offset.value() > container_bytes.size()) {
+    std::ostringstream message;
+    message << "PACK entry " << entry_index << " exceeds container bounds during extraction";
+    return {.error = make_out_of_bounds_container_error(entry.offset, entry.size, container_bytes.size(), message.str())};
+  }
+
+  const auto payload = container_bytes.subspan(entry.offset, entry.size);
+  const auto parsed = parse_pl8_resource(payload);
+  if (!parsed.ok()) {
+    std::ostringstream message;
+    message << "PACK entry " << entry_index << " failed PL8 validation: " << parsed.error->message;
+    return {.error = make_invalid_container_error(entry.offset, entry.size, container_bytes.size(), message.str())};
+  }
+
+  Win95PackPl8Extraction extraction;
+  extraction.entry = entry;
+  extraction.payload_bytes.reserve(payload.size());
+  for (const auto byte : payload) {
+    extraction.payload_bytes.push_back(std::to_integer<std::uint8_t>(byte));
+  }
+  extraction.pl8 = parsed.value.value();
+  return {.value = std::move(extraction)};
+}
+
+ParseResult<Win95PackPl8Extraction> extract_win95_pack_pl8_entry(std::span<const std::uint8_t> container_bytes,
+                                                                  const Win95PackContainerResource& container,
+                                                                  const std::size_t entry_index) {
+  return extract_win95_pack_pl8_entry(
       std::span<const std::byte>(reinterpret_cast<const std::byte*>(container_bytes.data()), container_bytes.size()),
       container,
       entry_index);
