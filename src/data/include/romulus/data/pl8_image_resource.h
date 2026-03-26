@@ -33,8 +33,32 @@ struct Pl8Image256PairDecodeResult {
   RgbaImage rgba_image;
 };
 
+struct Pl8ImageVariantProbeReport {
+  std::size_t file_size = 0;
+  std::size_t header_size = 0;
+  std::size_t payload_offset = 0;
+  std::uint16_t width = 0;
+  std::uint16_t height = 0;
+  std::size_t payload_size = 0;
+  std::size_t payload_expected_from_dimensions = 0;
+  std::ptrdiff_t payload_surplus_or_deficit = 0;
+  std::size_t derived_row_stride = 0;
+  bool has_row_padding_hint = false;
+  std::size_t row_padding_hint = 0;
+  bool has_trailing_block_hint = false;
+  std::size_t trailing_block_bytes_hint = 0;
+  std::vector<std::uint8_t> payload_prefix_preview;
+  std::vector<std::uint8_t> payload_suffix_preview;
+  std::vector<std::uint8_t> extra_prefix_preview;
+  std::vector<std::uint8_t> extra_suffix_preview;
+};
+
 [[nodiscard]] ParseResult<Pl8ImageResource> parse_caesar2_forum_pl8_image(std::span<const std::byte> bytes);
 [[nodiscard]] ParseResult<Pl8ImageResource> parse_caesar2_forum_pl8_image(std::span<const std::uint8_t> bytes);
+[[nodiscard]] ParseResult<Pl8ImageVariantProbeReport> probe_caesar2_large_pl8_image_variant(
+    std::span<const std::byte> bytes);
+[[nodiscard]] ParseResult<Pl8ImageVariantProbeReport> probe_caesar2_large_pl8_image_variant(
+    std::span<const std::uint8_t> bytes);
 
 [[nodiscard]] ParseResult<Pl8Image256PairDecodeResult> decode_caesar2_forum_pl8_image_pair(
     std::span<const std::uint8_t> image_pl8_bytes,
@@ -42,5 +66,12 @@ struct Pl8Image256PairDecodeResult {
     bool index_zero_transparent = false);
 
 [[nodiscard]] std::string format_pl8_image_report(const Pl8ImageResource& image, std::size_t max_pixels = 32);
+[[nodiscard]] std::string format_pl8_image_variant_probe_report(const Pl8ImageVariantProbeReport& report,
+                                                                std::size_t preview_bytes = 8);
+[[nodiscard]] std::string format_pl8_image_variant_comparison_report(const Pl8ImageVariantProbeReport& lhs,
+                                                                     const std::string& lhs_label,
+                                                                     const Pl8ImageVariantProbeReport& rhs,
+                                                                     const std::string& rhs_label,
+                                                                     std::size_t preview_bytes = 8);
 
 }  // namespace romulus::data
