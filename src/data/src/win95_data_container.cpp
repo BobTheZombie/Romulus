@@ -20,6 +20,15 @@ namespace {
   return make_invalid_format_error(offset, requested_bytes, buffer_size, message);
 }
 
+[[nodiscard]] ParseError make_out_of_bounds_container_error(std::size_t offset,
+                                                            std::size_t requested_bytes,
+                                                            std::size_t buffer_size,
+                                                            const std::string& message) {
+  auto error = make_out_of_bounds_error(offset, requested_bytes, buffer_size);
+  error.message = message;
+  return error;
+}
+
 [[nodiscard]] std::optional<std::size_t> checked_add(std::size_t left, std::size_t right) {
   if (right > std::numeric_limits<std::size_t>::max() - left) {
     return std::nullopt;
@@ -325,6 +334,66 @@ ParseResult<Win95PackContainerResource> parse_win95_pack_container(std::span<con
 ParseResult<Win95PackContainerResource> parse_win95_pack_container(std::span<const std::uint8_t> bytes) {
   return parse_win95_pack_container(
       std::span<const std::byte>(reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()));
+}
+
+ParseResult<Win95PackIlbmExtraction> extract_win95_pack_ilbm_entry(std::span<const std::byte> container_bytes,
+                                                                    const Win95PackContainerResource& container,
+                                                                    const std::size_t entry_index) {
+  if (entry_index >= container.entries.size()) {
+    std::ostringstream message;
+    message << "Invalid PACK entry index " << entry_index << "; entry count=" << container.entries.size();
+    return {.error = make_invalid_container_error(0, 0, container_bytes.size(), message.str())};
+  }
+
+  const auto& entry = container.entries[entry_index];
+  if (entry.classification_hint != "possible-ilbm") {
+    std::ostringstream message;
+    message << "PACK entry " << entry_index << " is unsupported for extraction (class=" << entry.classification_hint
+            << "): expected possible-ilbm";
+    return {.error = make_invalid_container_error(entry.offset, entry.size, container_bytes.size(), message.str())};
+  }
+
+  const auto end_offset = checked_add(entry.offset, entry.size);
+  if (!end_offset.has_value()) {
+    std::ostringstream message;
+    message << "PACK entry " << entry_index << " range overflows host size";
+    return {.error = make_invalid_container_error(entry.offset, entry.size, container_bytes.size(), message.str())};
+  }
+
+  if (end_offset.value() > container_bytes.size()) {
+    std::ostringstream message;
+    message << "PACK entry " << entry_index << " exceeds container bounds during extraction";
+    return {.error = make_out_of_bounds_container_error(entry.offset, entry.size, container_bytes.size(), message.str())};
+  }
+
+  const auto payload = container_bytes.subspan(entry.offset, entry.size);
+  const auto parsed = parse_ilbm_image(payload);
+  if (!parsed.ok()) {
+    std::ostringstream message;
+    message << "PACK entry " << entry_index << " failed ILBM validation: " << parsed.error->message;
+    return {.error = make_invalid_container_error(entry.offset,
+                                                  entry.size,
+                                                  container_bytes.size(),
+                                                  message.str())};
+  }
+
+  Win95PackIlbmExtraction extraction;
+  extraction.entry = entry;
+  extraction.payload_bytes.reserve(payload.size());
+  for (const auto byte : payload) {
+    extraction.payload_bytes.push_back(std::to_integer<std::uint8_t>(byte));
+  }
+  extraction.ilbm = parsed.value.value();
+  return {.value = std::move(extraction)};
+}
+
+ParseResult<Win95PackIlbmExtraction> extract_win95_pack_ilbm_entry(std::span<const std::uint8_t> container_bytes,
+                                                                    const Win95PackContainerResource& container,
+                                                                    const std::size_t entry_index) {
+  return extract_win95_pack_ilbm_entry(
+      std::span<const std::byte>(reinterpret_cast<const std::byte*>(container_bytes.data()), container_bytes.size()),
+      container,
+      entry_index);
 }
 
 ProbeWin95DataContainerResult probe_win95_data_container_file(const std::filesystem::path& data_root,

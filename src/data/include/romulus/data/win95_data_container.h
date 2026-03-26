@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "romulus/data/binary_reader.h"
+#include "romulus/data/ilbm_image.h"
 
 namespace romulus::data {
 
@@ -60,6 +61,12 @@ struct Win95PackContainerResource {
   Win95PackContainerSummary summary;
 };
 
+struct Win95PackIlbmExtraction {
+  Win95PackContainerEntry entry;
+  std::vector<std::uint8_t> payload_bytes;
+  IlbmImageResource ilbm;
+};
+
 struct Win95PackReportOptions {
   std::size_t preview_entry_limit = 8;
   bool include_all_entries = false;
@@ -83,6 +90,15 @@ constexpr std::size_t k_default_win95_container_max_file_load_bytes = 64 * 1024 
 
 [[nodiscard]] ParseResult<Win95PackContainerResource> parse_win95_pack_container(std::span<const std::byte> bytes);
 [[nodiscard]] ParseResult<Win95PackContainerResource> parse_win95_pack_container(std::span<const std::uint8_t> bytes);
+
+[[nodiscard]] ParseResult<Win95PackIlbmExtraction> extract_win95_pack_ilbm_entry(
+    std::span<const std::byte> container_bytes,
+    const Win95PackContainerResource& container,
+    std::size_t entry_index);
+[[nodiscard]] ParseResult<Win95PackIlbmExtraction> extract_win95_pack_ilbm_entry(
+    std::span<const std::uint8_t> container_bytes,
+    const Win95PackContainerResource& container,
+    std::size_t entry_index);
 
 [[nodiscard]] ProbeWin95DataContainerResult probe_win95_data_container_file(
     const std::filesystem::path& data_root,
