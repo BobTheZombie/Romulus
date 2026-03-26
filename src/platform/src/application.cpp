@@ -29,6 +29,12 @@ constexpr int kWindowHeight = 720;
 constexpr auto kSmokeTestRuntime = std::chrono::milliseconds(50);
 constexpr auto kFixedStep = std::chrono::milliseconds(16);
 
+struct ForumComposedLoadResult {
+  romulus::data::RgbaImage composed_image;
+  std::optional<romulus::data::RgbaImage> sprite_debug_base_image;
+  std::vector<romulus::data::Pl8DecodedSprite> sprite_debug_sprites;
+};
+
 [[nodiscard]] std::optional<romulus::data::RgbaImage> load_bootstrap_image(
     const std::filesystem::path& data_root,
     const std::optional<std::filesystem::path>& override_path,
@@ -92,8 +98,8 @@ void blend_rgba_layers(romulus::data::RgbaImage* destination, const romulus::dat
   }
 }
 
-[[nodiscard]] std::optional<romulus::data::RgbaImage> load_forum_composed_image(const std::filesystem::path& data_root,
-                                                                                 std::string* error_message) {
+[[nodiscard]] std::optional<ForumComposedLoadResult> load_forum_composed_image(const std::filesystem::path& data_root,
+                                                                                std::string* error_message) {
   const auto background = select_forum_background_asset(data_root);
   if (!background.has_value()) {
     *error_message = "Unable to resolve forum background layer: data/forum.lbm.";
@@ -129,7 +135,9 @@ void blend_rgba_layers(romulus::data::RgbaImage* destination, const romulus::dat
   romulus::core::log_info("Forum compose background decoded RGBA " + std::to_string(decoded_background.value->width) +
                           "x" + std::to_string(decoded_background.value->height));
 
-  romulus::data::RgbaImage composed = decoded_background.value.value();
+  ForumComposedLoadResult result{
+      .composed_image = decoded_background.value.value(),
+  };
   for (const auto& overlay_spec : default_forum_overlay_specs()) {
     romulus::core::log_info("Forum compose overlay resolving: image='" + overlay_spec.image_pl8_path.string() +
                             "', palette='" + overlay_spec.palette_256_path.string() + "'");
@@ -175,8 +183,13 @@ void blend_rgba_layers(romulus::data::RgbaImage* destination, const romulus::dat
         romulus::core::log_info("Forum compose overlay PL8 sprite-table decode succeeded for image='" +
                                 selection->image_pl8_logical_path.string() + "' decoded_sprites=" +
                                 std::to_string(sprite_overlay.value->decoded_sprites.size()));
+        if (!result.sprite_debug_base_image.has_value()) {
+          result.sprite_debug_base_image = result.composed_image;
+          result.sprite_debug_sprites = sprite_overlay.value->decoded_sprites;
+        }
+
         const auto placed_overlay = compose_sprite_layer_to_canvas(
-            composed.width, composed.height, sprite_overlay.value->decoded_sprites);
+            result.composed_image.width, result.composed_image.height, sprite_overlay.value->decoded_sprites);
         if (!placed_overlay.has_value()) {
           romulus::core::log_warning("Forum compose overlay skipped: full-canvas placement failed for image='" +
                                      selection->image_pl8_logical_path.string() + "'");
@@ -196,7 +209,7 @@ void blend_rgba_layers(romulus::data::RgbaImage* destination, const romulus::dat
         decoded_overlay.error.reset();
         romulus::core::log_info("Forum compose overlay PL8 sprite-table full-canvas placement succeeded for image='" +
                                 selection->image_pl8_logical_path.string() + "' target=" +
-                                std::to_string(composed.width) + "x" + std::to_string(composed.height) +
+                                std::to_string(result.composed_image.width) + "x" + std::to_string(result.composed_image.height) +
                                 " placed_sprites=" + std::to_string(placed_overlay->stats.placed_sprites) +
                                 " clipped_sprites=" + std::to_string(placed_overlay->stats.clipped_sprites) +
                                 " skipped_out_of_bounds_sprites=" +
@@ -236,22 +249,22 @@ void blend_rgba_layers(romulus::data::RgbaImage* destination, const romulus::dat
       }
     }
 
-    if (decoded_overlay.value->rgba_image.width != composed.width ||
-        decoded_overlay.value->rgba_image.height != composed.height) {
+    if (decoded_overlay.value->rgba_image.width != result.composed_image.width ||
+        decoded_overlay.value->rgba_image.height != result.composed_image.height) {
       romulus::core::log_warning("Forum compose overlay skipped: size mismatch image='" +
                                  selection->image_pl8_logical_path.string() + "' decoded=" +
                                  std::to_string(decoded_overlay.value->rgba_image.width) + "x" +
                                  std::to_string(decoded_overlay.value->rgba_image.height) + " background=" +
-                                 std::to_string(composed.width) + "x" + std::to_string(composed.height));
+                                 std::to_string(result.composed_image.width) + "x" + std::to_string(result.composed_image.height));
       continue;
     }
 
-    blend_rgba_layers(&composed, decoded_overlay.value->rgba_image);
+    blend_rgba_layers(&result.composed_image, decoded_overlay.value->rgba_image);
     romulus::core::log_info("Forum compose overlay composed: image='" + selection->image_pl8_logical_path.string() +
                             "', palette='" + selection->palette_256_logical_path.string() + "'");
   }
 
-  return composed;
+  return result;
 }
 
 [[nodiscard]] int show_wizard_message_box(const SetupWizardSnapshot& snapshot) {
@@ -360,7 +373,16 @@ int Application::run() {
 
   if (!options_.debug_view_image.has_value()) {
     std::string bootstrap_error;
-    options_.debug_view_image = load_forum_composed_image(*options_.data_root, &bootstrap_error);
+    const auto forum_result = load_forum_composed_image(*options_.data_root, &bootstrap_error);
+    if (forum_result.has_value()) {
+      options_.debug_view_image = forum_result->composed_image;
+      forum_base_image_ = forum_result->sprite_debug_base_image;
+      forum_debug_sprites_ = forum_result->sprite_debug_sprites;
+      if (!forum_debug_sprites_.empty()) {
+        romulus::core::log_info(
+            "Forum sprite placement debug controls: [1-4]=mode [0]=show all [[]/[]]=isolate prev/next [r]=reverse order");
+      }
+    }
     if (!options_.debug_view_image.has_value() && options_.startup_image_override.has_value()) {
       romulus::core::log_warning("Forum composition path unavailable; trying override bootstrap image.");
       options_.debug_view_image = load_bootstrap_image(*options_.data_root, options_.startup_image_override, &bootstrap_error);
@@ -421,27 +443,15 @@ int Application::run() {
     return 1;
   }
 
-  viewer_texture_ = SDL_CreateTexture(
-      renderer_, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, image.width, image.height);
-  if (viewer_texture_ == nullptr) {
-    romulus::core::log_error(std::string("SDL_CreateTexture failed: ") + SDL_GetError());
+  if (!update_viewer_texture(image)) {
     SDL_DestroyRenderer(renderer_);
     SDL_DestroyWindow(window);
     SDL_Quit();
     return 1;
   }
-
-  if (SDL_UpdateTexture(viewer_texture_, nullptr, image.pixels_rgba.data(), static_cast<int>(image.width) * 4) != 0) {
-    romulus::core::log_error(std::string("SDL_UpdateTexture failed: ") + SDL_GetError());
-    SDL_DestroyTexture(viewer_texture_);
-    SDL_DestroyRenderer(renderer_);
-    SDL_DestroyWindow(window);
-    SDL_Quit();
-    return 1;
+  if (!forum_debug_sprites_.empty()) {
+    log_forum_sprite_debug_report();
   }
-
-  viewer_texture_width_ = image.width;
-  viewer_texture_height_ = image.height;
 
   romulus::core::FixedTimestepClock clock(kFixedStep);
   auto last_frame_time = std::chrono::steady_clock::now();
@@ -455,6 +465,45 @@ int Application::run() {
         running = false;
       } else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
         running = false;
+      } else if (event.type == SDL_KEYDOWN && !forum_debug_sprites_.empty() && forum_base_image_.has_value()) {
+        bool handled = true;
+        if (event.key.keysym.sym == SDLK_1) {
+          forum_debug_options_.placement_mode = SpritePlacementMode::TopLeft;
+        } else if (event.key.keysym.sym == SDLK_2) {
+          forum_debug_options_.placement_mode = SpritePlacementMode::BottomLeft;
+        } else if (event.key.keysym.sym == SDLK_3) {
+          forum_debug_options_.placement_mode = SpritePlacementMode::Centered;
+        } else if (event.key.keysym.sym == SDLK_4) {
+          forum_debug_options_.placement_mode = SpritePlacementMode::BottomCenter;
+        } else if (event.key.keysym.sym == SDLK_0) {
+          forum_debug_options_.isolated_sprite_index.reset();
+        } else if (event.key.keysym.sym == SDLK_LEFTBRACKET) {
+          if (forum_debug_options_.isolated_sprite_index.has_value()) {
+            const auto current = forum_debug_options_.isolated_sprite_index.value();
+            forum_debug_options_.isolated_sprite_index = current == 0 ? forum_debug_sprites_.size() - 1 : current - 1;
+          } else if (!forum_debug_sprites_.empty()) {
+            forum_debug_options_.isolated_sprite_index = forum_debug_sprites_.size() - 1;
+          }
+        } else if (event.key.keysym.sym == SDLK_RIGHTBRACKET) {
+          if (forum_debug_options_.isolated_sprite_index.has_value()) {
+            forum_debug_options_.isolated_sprite_index =
+                (forum_debug_options_.isolated_sprite_index.value() + 1) % forum_debug_sprites_.size();
+          } else {
+            forum_debug_options_.isolated_sprite_index = 0;
+          }
+        } else if (event.key.keysym.sym == SDLK_r) {
+          forum_debug_options_.draw_order = forum_debug_options_.draw_order == SpriteDrawOrder::Forward
+                                                ? SpriteDrawOrder::Reverse
+                                                : SpriteDrawOrder::Forward;
+        } else {
+          handled = false;
+        }
+
+        if (handled) {
+          if (!rebuild_forum_debug_image()) {
+            running = false;
+          }
+        }
       }
     }
 
@@ -493,6 +542,84 @@ int Application::run() {
   romulus::core::log_info("Shutdown complete.");
 
   return 0;
+}
+
+bool Application::update_viewer_texture(const romulus::data::RgbaImage& image) {
+  if (renderer_ == nullptr) {
+    return false;
+  }
+
+  if (viewer_texture_ != nullptr &&
+      (viewer_texture_width_ != image.width || viewer_texture_height_ != image.height)) {
+    SDL_DestroyTexture(viewer_texture_);
+    viewer_texture_ = nullptr;
+  }
+
+  if (viewer_texture_ == nullptr) {
+    viewer_texture_ =
+        SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, image.width, image.height);
+    if (viewer_texture_ == nullptr) {
+      romulus::core::log_error(std::string("SDL_CreateTexture failed: ") + SDL_GetError());
+      return false;
+    }
+  }
+
+  if (SDL_UpdateTexture(viewer_texture_, nullptr, image.pixels_rgba.data(), static_cast<int>(image.width) * 4) != 0) {
+    romulus::core::log_error(std::string("SDL_UpdateTexture failed: ") + SDL_GetError());
+    return false;
+  }
+
+  viewer_texture_width_ = image.width;
+  viewer_texture_height_ = image.height;
+  return true;
+}
+
+void Application::log_forum_sprite_debug_report() const {
+  if (forum_debug_sprites_.empty()) {
+    return;
+  }
+
+  std::vector<SpritePlacementDebugEntry> entries;
+  entries.reserve(forum_debug_sprites_.size());
+  for (const auto& sprite : forum_debug_sprites_) {
+    if (!sprite_is_visible_for_options(sprite.sprite_index, forum_debug_options_)) {
+      continue;
+    }
+    entries.push_back({
+        .sprite_index = sprite.sprite_index,
+        .width = sprite.sprite.width,
+        .height = sprite.sprite.height,
+        .descriptor_x = sprite.sprite.x,
+        .descriptor_y = sprite.sprite.y,
+        .tile_type = sprite.sprite.tile_type,
+        .destination_rect = compute_sprite_destination_rect(sprite, forum_debug_options_.placement_mode),
+    });
+  }
+
+  romulus::core::log_info(format_sprite_placement_report(forum_debug_sprites_, forum_debug_options_, entries));
+}
+
+bool Application::rebuild_forum_debug_image() {
+  if (!forum_base_image_.has_value()) {
+    return false;
+  }
+
+  auto image = forum_base_image_.value();
+  const auto overlay =
+      compose_sprite_layer_to_canvas(image.width, image.height, forum_debug_sprites_, forum_debug_options_);
+  if (!overlay.has_value()) {
+    romulus::core::log_error("Failed to rebuild forum sprite debug overlay.");
+    return false;
+  }
+
+  blend_rgba_layers(&image, overlay->rgba_image);
+  options_.debug_view_image = image;
+  if (!update_viewer_texture(image)) {
+    return false;
+  }
+
+  log_forum_sprite_debug_report();
+  return true;
 }
 
 bool Application::run_bootstrap_flow() {

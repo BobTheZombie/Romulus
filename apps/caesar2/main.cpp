@@ -27,6 +27,7 @@
 #include "romulus/data/win95_data_container.h"
 #include "romulus/data/win95_data_probe.h"
 #include "romulus/platform/application.h"
+#include "romulus/platform/forum_composition.h"
 #include "romulus/platform/startup.h"
 
 namespace {
@@ -77,6 +78,8 @@ struct ParsedArguments {
   std::optional<std::string> export_pl8_structured_file;
   std::optional<std::string> export_pl8_structured_palette_file;
   std::optional<std::string> probe_pl8_sprites_file;
+  std::optional<std::string> probe_pl8_sprite_placement_image_file;
+  std::optional<std::string> probe_pl8_sprite_placement_palette_file;
   std::optional<std::string> view_pl8_sprite_file;
   std::optional<std::string> view_pl8_sprite_palette_file;
   std::optional<std::string> export_pl8_sprite_file;
@@ -331,6 +334,17 @@ struct ParsedArguments {
       }
 
       parsed.probe_pl8_sprites_file = argv[++index];
+      continue;
+    }
+
+    if (argument == "--probe-pl8-sprite-placement") {
+      if (index + 2 >= argc) {
+        romulus::core::log_error("--probe-pl8-sprite-placement requires <imagepl8> <palette256>.");
+        return std::nullopt;
+      }
+
+      parsed.probe_pl8_sprite_placement_image_file = argv[++index];
+      parsed.probe_pl8_sprite_placement_palette_file = argv[++index];
       continue;
     }
 
@@ -945,6 +959,9 @@ struct ParsedArguments {
       parsed.export_pl8_structured_file.has_value() || parsed.export_pl8_structured_palette_file.has_value() ||
       (parsed.export_output_file.has_value() && parsed.export_pl8_structured_file.has_value());
   const bool has_pl8_sprite_probe_arg = parsed.probe_pl8_sprites_file.has_value();
+  const bool has_pl8_sprite_placement_probe_arg =
+      parsed.probe_pl8_sprite_placement_image_file.has_value() ||
+      parsed.probe_pl8_sprite_placement_palette_file.has_value();
   const bool has_pl8_sprite_view_arg =
       parsed.view_pl8_sprite_file.has_value() || parsed.view_pl8_sprite_palette_file.has_value();
   const bool has_pl8_sprite_export_arg =
@@ -954,7 +971,7 @@ struct ParsedArguments {
       has_pl8_image_probe_arg || has_pl8_variant_probe_arg || has_pl8_structured_probe_arg ||
       has_pl8_structured_regions_probe_arg || has_pl8_variant_compare_arg || has_pl8_structured_regions_compare_arg ||
       has_pl8_image_view_arg || has_pl8_image_export_arg || has_pl8_structured_view_arg || has_pl8_structured_export_arg ||
-      has_pl8_sprite_probe_arg || has_pl8_sprite_view_arg || has_pl8_sprite_export_arg;
+      has_pl8_sprite_probe_arg || has_pl8_sprite_placement_probe_arg || has_pl8_sprite_view_arg || has_pl8_sprite_export_arg;
   if (has_pl8_image_view_arg) {
     if (!parsed.view_pl8_image_file.has_value() || !parsed.view_pl8_image_palette_file.has_value()) {
       romulus::core::log_error("--view-pl8-image-pair requires <imagepl8> <palette256>.");
@@ -1006,6 +1023,13 @@ struct ParsedArguments {
     if (!parsed.export_pl8_sprite_file.has_value() || !parsed.export_pl8_sprite_palette_file.has_value() ||
         !parsed.export_output_file.has_value()) {
       romulus::core::log_error("--export-pl8-sprite-pair requires <imagepl8> <palette256> --export-output <path>.");
+      return std::nullopt;
+    }
+  }
+  if (has_pl8_sprite_placement_probe_arg) {
+    if (!parsed.probe_pl8_sprite_placement_image_file.has_value() ||
+        !parsed.probe_pl8_sprite_placement_palette_file.has_value()) {
+      romulus::core::log_error("--probe-pl8-sprite-placement requires <imagepl8> <palette256>.");
       return std::nullopt;
     }
   }
@@ -1896,6 +1920,39 @@ int run_pl8_sprite_probe(const std::filesystem::path& data_root, const std::stri
   }
 
   std::cout << romulus::data::format_pl8_sprite_table_report(parsed.value.value());
+  return 0;
+}
+
+int run_pl8_sprite_placement_probe(const std::filesystem::path& data_root,
+                                   const std::string& image_pl8_file_arg,
+                                   const std::string& palette_256_file_arg) {
+  const auto decoded = decode_pl8_sprite_256_to_rgba(data_root, image_pl8_file_arg, palette_256_file_arg, true);
+  if (!decoded.has_value()) {
+    return 1;
+  }
+
+  for (const auto mode : romulus::platform::sprite_placement_modes()) {
+    const romulus::platform::SpritePlacementOptions options{
+        .placement_mode = mode,
+        .draw_order = romulus::platform::SpriteDrawOrder::Forward,
+        .isolated_sprite_index = std::nullopt,
+    };
+    std::vector<romulus::platform::SpritePlacementDebugEntry> entries;
+    entries.reserve(decoded->decoded_sprites.size());
+    for (const auto& sprite : decoded->decoded_sprites) {
+      entries.push_back({
+          .sprite_index = sprite.sprite_index,
+          .width = sprite.sprite.width,
+          .height = sprite.sprite.height,
+          .descriptor_x = sprite.sprite.x,
+          .descriptor_y = sprite.sprite.y,
+          .tile_type = sprite.sprite.tile_type,
+          .destination_rect = romulus::platform::compute_sprite_destination_rect(sprite, mode),
+      });
+    }
+    std::cout << romulus::platform::format_sprite_placement_report(decoded->decoded_sprites, options, entries);
+  }
+
   return 0;
 }
 
@@ -2921,6 +2978,7 @@ int main(int argc, char* argv[]) {
         "[--probe-file <path>] [--probe-candidate <path>] [--match-signature <path>] "
         "[--probe-lbm <path>] [--probe-pl8 <path> ...] [--probe-pl8-image <path>] "
         "[--probe-pl8-sprites <path>] "
+        "[--probe-pl8-sprite-placement <imagepl8> <palette256>] "
         "[--probe-pl8-image-variant <path>] [--probe-pl8-structured <path>] "
         "[--probe-pl8-structured-regions <path>] "
         "[--compare-pl8-image-variants <lhs_imagepl8> <rhs_imagepl8>] "
@@ -2987,6 +3045,7 @@ int main(int argc, char* argv[]) {
                                          parsed->probe_lbm_file.has_value() || !parsed->probe_pl8_files.empty() ||
                                          parsed->probe_pl8_image_file.has_value() ||
                                          parsed->probe_pl8_sprites_file.has_value() ||
+                                         parsed->probe_pl8_sprite_placement_image_file.has_value() ||
                                          parsed->probe_pl8_image_variant_file.has_value() ||
                                          parsed->probe_pl8_structured_file.has_value() ||
                                          parsed->probe_pl8_structured_regions_file.has_value() ||
@@ -3052,6 +3111,11 @@ int main(int argc, char* argv[]) {
   }
   if (parsed->probe_pl8_sprites_file.has_value()) {
     return run_pl8_sprite_probe(data_root, parsed->probe_pl8_sprites_file.value());
+  }
+  if (parsed->probe_pl8_sprite_placement_image_file.has_value()) {
+    return run_pl8_sprite_placement_probe(data_root,
+                                          parsed->probe_pl8_sprite_placement_image_file.value(),
+                                          parsed->probe_pl8_sprite_placement_palette_file.value());
   }
 
   if (parsed->probe_pl8_image_variant_file.has_value()) {
