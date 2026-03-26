@@ -195,6 +195,45 @@ struct Win95PackTextReportOptions {
   std::size_t preview_character_limit = 160;
 };
 
+enum class Win95PackKnownFamilyKind {
+  Ilbm,
+  Text,
+  Pl8,
+};
+
+struct Win95PackUnifiedSuccessEntry {
+  std::size_t entry_index = 0;
+  std::size_t offset = 0;
+  std::size_t size = 0;
+  Win95PackKnownFamilyKind family_kind = Win95PackKnownFamilyKind::Text;
+  std::optional<std::size_t> ilbm_width;
+  std::optional<std::size_t> ilbm_height;
+  std::optional<std::size_t> ilbm_palette_color_count;
+  std::optional<std::size_t> text_line_count;
+  std::optional<std::size_t> text_character_count;
+  std::optional<std::string> text_preview;
+  std::optional<std::size_t> pl8_palette_entry_count;
+};
+
+struct Win95PackUnifiedSuccessSummary {
+  std::size_t total_entry_count = 0;
+  std::size_t known_entry_count = 0;
+  std::size_t unknown_entry_count = 0;
+  std::size_t ilbm_success_count = 0;
+  std::size_t text_success_count = 0;
+  std::size_t pl8_success_count = 0;
+};
+
+struct Win95PackUnifiedSuccessIndex {
+  Win95PackUnifiedSuccessSummary summary;
+  std::vector<Win95PackUnifiedSuccessEntry> successful_entries;
+};
+
+struct Win95PackUnifiedSuccessReportOptions {
+  std::size_t preview_entry_limit = 8;
+  bool include_all_entries = false;
+};
+
 struct Win95DataContainerProbeError {
   std::filesystem::path requested_path;
   std::string message;
@@ -253,6 +292,14 @@ constexpr std::size_t k_default_win95_container_max_file_load_bytes = 64 * 1024 
     std::size_t preview_character_limit = 80);
 [[nodiscard]] Win95PackIlbmIndex build_win95_pack_ilbm_success_index(const Win95PackIlbmBatchResult& batch_result);
 [[nodiscard]] Win95PackTextIndex build_win95_pack_text_success_index(const Win95PackTextBatchResult& batch_result);
+[[nodiscard]] Win95PackUnifiedSuccessIndex build_win95_pack_unified_success_index(
+    std::span<const std::byte> container_bytes,
+    const Win95PackContainerResource& container,
+    std::size_t preview_character_limit = 80);
+[[nodiscard]] Win95PackUnifiedSuccessIndex build_win95_pack_unified_success_index(
+    std::span<const std::uint8_t> container_bytes,
+    const Win95PackContainerResource& container,
+    std::size_t preview_character_limit = 80);
 [[nodiscard]] std::optional<Win95PackIlbmIndexEntry> find_win95_pack_ilbm_index_entry(
     const Win95PackIlbmIndex& index,
     std::size_t entry_index);
@@ -287,5 +334,9 @@ constexpr std::size_t k_default_win95_container_max_file_load_bytes = 64 * 1024 
 [[nodiscard]] std::string format_win95_pack_text_report(const Win95PackTextExtraction& extraction,
                                                         std::string_view source_label = "",
                                                         Win95PackTextReportOptions options = {});
+[[nodiscard]] std::string format_win95_pack_unified_success_index_report(
+    const Win95PackUnifiedSuccessIndex& index,
+    std::string_view source_label = "",
+    Win95PackUnifiedSuccessReportOptions options = {});
 
 }  // namespace romulus::data

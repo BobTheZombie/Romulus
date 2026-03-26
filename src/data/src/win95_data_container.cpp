@@ -109,6 +109,19 @@ namespace {
   return preview;
 }
 
+[[nodiscard]] std::string_view to_family_label(const Win95PackKnownFamilyKind family_kind) {
+  switch (family_kind) {
+    case Win95PackKnownFamilyKind::Ilbm:
+      return "ilbm";
+    case Win95PackKnownFamilyKind::Text:
+      return "text";
+    case Win95PackKnownFamilyKind::Pl8:
+      return "pl8";
+  }
+
+  return "unknown";
+}
+
 struct RangeCheck {
   std::size_t index = 0;
   std::size_t offset = 0;
@@ -770,6 +783,88 @@ Win95PackTextIndex build_win95_pack_text_success_index(const Win95PackTextBatchR
   return index;
 }
 
+Win95PackUnifiedSuccessIndex build_win95_pack_unified_success_index(std::span<const std::byte> container_bytes,
+                                                                    const Win95PackContainerResource& container,
+                                                                    const std::size_t preview_character_limit) {
+  Win95PackUnifiedSuccessIndex unified;
+  unified.summary.total_entry_count = container.entries.size();
+
+  const auto ilbm_batch = analyze_win95_pack_ilbm_batch(container_bytes, container);
+  const auto ilbm_index = build_win95_pack_ilbm_success_index(ilbm_batch);
+  for (const auto& entry : ilbm_index.successful_entries) {
+    unified.successful_entries.push_back(Win95PackUnifiedSuccessEntry{
+        .entry_index = entry.entry_index,
+        .offset = entry.offset,
+        .size = entry.size,
+        .family_kind = Win95PackKnownFamilyKind::Ilbm,
+        .ilbm_width = entry.width,
+        .ilbm_height = entry.height,
+        .ilbm_palette_color_count = entry.palette_color_count,
+    });
+  }
+
+  const auto text_batch = analyze_win95_pack_text_batch(container_bytes, container, preview_character_limit);
+  const auto text_index = build_win95_pack_text_success_index(text_batch);
+  for (const auto& entry : text_index.successful_entries) {
+    unified.successful_entries.push_back(Win95PackUnifiedSuccessEntry{
+        .entry_index = entry.entry_index,
+        .offset = entry.offset,
+        .size = entry.size,
+        .family_kind = Win95PackKnownFamilyKind::Text,
+        .text_line_count = entry.line_count,
+        .text_character_count = entry.character_count,
+        .text_preview = entry.text_preview,
+    });
+  }
+
+  for (const auto& entry : container.entries) {
+    const auto extracted = extract_win95_pack_pl8_entry(container_bytes, container, entry.index);
+    if (!extracted.ok()) {
+      continue;
+    }
+
+    unified.successful_entries.push_back(Win95PackUnifiedSuccessEntry{
+        .entry_index = entry.index,
+        .offset = entry.offset,
+        .size = entry.size,
+        .family_kind = Win95PackKnownFamilyKind::Pl8,
+        .pl8_palette_entry_count = extracted.value->pl8.palette_entries.size(),
+    });
+  }
+
+  std::stable_sort(unified.successful_entries.begin(), unified.successful_entries.end(), [](const auto& left, const auto& right) {
+    if (left.entry_index != right.entry_index) {
+      return left.entry_index < right.entry_index;
+    }
+    return left.offset < right.offset;
+  });
+
+  for (const auto& entry : unified.successful_entries) {
+    if (entry.family_kind == Win95PackKnownFamilyKind::Ilbm) {
+      ++unified.summary.ilbm_success_count;
+    } else if (entry.family_kind == Win95PackKnownFamilyKind::Text) {
+      ++unified.summary.text_success_count;
+    } else if (entry.family_kind == Win95PackKnownFamilyKind::Pl8) {
+      ++unified.summary.pl8_success_count;
+    }
+  }
+
+  unified.summary.known_entry_count = unified.successful_entries.size();
+  if (unified.summary.total_entry_count >= unified.summary.known_entry_count) {
+    unified.summary.unknown_entry_count = unified.summary.total_entry_count - unified.summary.known_entry_count;
+  }
+  return unified;
+}
+
+Win95PackUnifiedSuccessIndex build_win95_pack_unified_success_index(std::span<const std::uint8_t> container_bytes,
+                                                                    const Win95PackContainerResource& container,
+                                                                    const std::size_t preview_character_limit) {
+  return build_win95_pack_unified_success_index(
+      std::span<const std::byte>(reinterpret_cast<const std::byte*>(container_bytes.data()), container_bytes.size()),
+      container,
+      preview_character_limit);
+}
+
 std::optional<Win95PackIlbmIndexEntry> find_win95_pack_ilbm_index_entry(const Win95PackIlbmIndex& index,
                                                                          const std::size_t entry_index) {
   for (const auto& entry : index.successful_entries) {
@@ -1056,6 +1151,55 @@ std::string format_win95_pack_text_report(const Win95PackTextExtraction& extract
          << make_text_preview(extraction.decoded_text, options.preview_character_limit, &truncated)
          << "\n";
   output << "text_preview_truncated: " << (truncated ? "yes" : "no") << "\n";
+  return output.str();
+}
+
+std::string format_win95_pack_unified_success_index_report(const Win95PackUnifiedSuccessIndex& index,
+                                                           std::string_view source_label,
+                                                           const Win95PackUnifiedSuccessReportOptions options) {
+  std::ostringstream output;
+  output << "# Caesar II Win95 PACK Unified Success Index Report\n";
+  if (!source_label.empty()) {
+    output << "source: " << source_label << "\n";
+  }
+
+  output << "total_entries: " << index.summary.total_entry_count << "\n";
+  output << "known_supported_entries: " << index.summary.known_entry_count << "\n";
+  output << "unknown_entries: " << index.summary.unknown_entry_count << "\n";
+  output << "known_ratio: " << index.summary.known_entry_count << "/" << index.summary.total_entry_count << "\n";
+  output << "family_success_counts: ilbm=" << index.summary.ilbm_success_count
+         << " text=" << index.summary.text_success_count
+         << " pl8=" << index.summary.pl8_success_count << "\n";
+
+  const auto entry_limit = options.include_all_entries
+                               ? index.successful_entries.size()
+                               : std::min<std::size_t>(options.preview_entry_limit, index.successful_entries.size());
+  output << "successful_entries_preview: showing " << entry_limit << " of " << index.successful_entries.size() << "\n";
+  for (std::size_t current = 0; current < entry_limit; ++current) {
+    const auto& entry = index.successful_entries[current];
+    output << "  - index: " << entry.entry_index
+           << " offset=" << entry.offset
+           << " size=" << entry.size
+           << " family=" << to_family_label(entry.family_kind);
+    if (entry.family_kind == Win95PackKnownFamilyKind::Ilbm) {
+      output << " width=" << entry.ilbm_width.value_or(0)
+             << " height=" << entry.ilbm_height.value_or(0)
+             << " palette_colors=" << entry.ilbm_palette_color_count.value_or(0);
+    } else if (entry.family_kind == Win95PackKnownFamilyKind::Text) {
+      output << " lines=" << entry.text_line_count.value_or(0)
+             << " chars=" << entry.text_character_count.value_or(0)
+             << " preview=" << entry.text_preview.value_or("");
+    } else if (entry.family_kind == Win95PackKnownFamilyKind::Pl8) {
+      output << " palette_entries=" << entry.pl8_palette_entry_count.value_or(0)
+             << " layout=simple-pl8";
+    }
+    output << "\n";
+  }
+
+  if (entry_limit < index.successful_entries.size()) {
+    output << "successful_entries_preview_truncated: yes\n";
+  }
+
   return output.str();
 }
 
