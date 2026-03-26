@@ -53,6 +53,44 @@ namespace {
   return std::string(message);
 }
 
+[[nodiscard]] bool is_supported_text_character(const unsigned char value) {
+  return (value >= 0x20 && value <= 0x7E) || value == '\n' || value == '\r' || value == '\t';
+}
+
+[[nodiscard]] std::size_t count_text_lines(std::string_view decoded_text) {
+  if (decoded_text.empty()) {
+    return 0;
+  }
+
+  return 1 + static_cast<std::size_t>(std::count(decoded_text.begin(), decoded_text.end(), '\n'));
+}
+
+[[nodiscard]] std::string make_text_preview(std::string_view text, std::size_t limit, bool* truncated_out) {
+  const auto preview_size = std::min(limit, text.size());
+  std::string preview;
+  preview.reserve(preview_size);
+
+  for (std::size_t index = 0; index < preview_size; ++index) {
+    const auto value = static_cast<unsigned char>(text[index]);
+    if (value == '\n') {
+      preview += "\\n";
+    } else if (value == '\r') {
+      preview += "\\r";
+    } else if (value == '\t') {
+      preview += "\\t";
+    } else {
+      preview.push_back(static_cast<char>(value));
+    }
+  }
+
+  const bool truncated = preview_size < text.size();
+  if (truncated_out != nullptr) {
+    *truncated_out = truncated;
+  }
+
+  return preview;
+}
+
 struct RangeCheck {
   std::size_t index = 0;
   std::size_t offset = 0;
@@ -412,6 +450,72 @@ ParseResult<Win95PackIlbmExtraction> extract_win95_pack_ilbm_entry(std::span<con
       entry_index);
 }
 
+ParseResult<Win95PackTextExtraction> extract_win95_pack_text_entry(std::span<const std::byte> container_bytes,
+                                                                   const Win95PackContainerResource& container,
+                                                                   const std::size_t entry_index) {
+  if (entry_index >= container.entries.size()) {
+    std::ostringstream message;
+    message << "Invalid PACK entry index " << entry_index << "; entry count=" << container.entries.size();
+    return {.error = make_invalid_container_error(0, 0, container_bytes.size(), message.str())};
+  }
+
+  const auto& entry = container.entries[entry_index];
+  if (entry.classification_hint != "text-like") {
+    std::ostringstream message;
+    message << "PACK entry " << entry_index << " is unsupported for text extraction (class=" << entry.classification_hint
+            << "): expected text-like";
+    return {.error = make_invalid_container_error(entry.offset, entry.size, container_bytes.size(), message.str())};
+  }
+
+  const auto end_offset = checked_add(entry.offset, entry.size);
+  if (!end_offset.has_value()) {
+    std::ostringstream message;
+    message << "PACK entry " << entry_index << " range overflows host size";
+    return {.error = make_invalid_container_error(entry.offset, entry.size, container_bytes.size(), message.str())};
+  }
+
+  if (end_offset.value() > container_bytes.size()) {
+    std::ostringstream message;
+    message << "PACK entry " << entry_index << " exceeds container bounds during extraction";
+    return {.error = make_out_of_bounds_container_error(entry.offset, entry.size, container_bytes.size(), message.str())};
+  }
+
+  const auto payload = container_bytes.subspan(entry.offset, entry.size);
+  std::string decoded_text;
+  decoded_text.reserve(payload.size());
+  std::vector<std::uint8_t> payload_bytes;
+  payload_bytes.reserve(payload.size());
+  for (const auto byte : payload) {
+    const auto value = std::to_integer<unsigned char>(byte);
+    payload_bytes.push_back(value);
+    if (!is_supported_text_character(value)) {
+      std::ostringstream message;
+      message << "PACK entry " << entry_index << " failed text validation: unsupported byte 0x"
+              << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned int>(value);
+      return {.error = make_invalid_container_error(entry.offset, entry.size, container_bytes.size(), message.str())};
+    }
+
+    decoded_text.push_back(static_cast<char>(value));
+  }
+
+  Win95PackTextExtraction extraction;
+  extraction.entry = entry;
+  extraction.payload_bytes = std::move(payload_bytes);
+  extraction.decoded_text = std::move(decoded_text);
+  extraction.character_count = extraction.decoded_text.size();
+  extraction.line_count = count_text_lines(extraction.decoded_text);
+  return {.value = std::move(extraction)};
+}
+
+ParseResult<Win95PackTextExtraction> extract_win95_pack_text_entry(std::span<const std::uint8_t> container_bytes,
+                                                                   const Win95PackContainerResource& container,
+                                                                   const std::size_t entry_index) {
+  return extract_win95_pack_text_entry(
+      std::span<const std::byte>(reinterpret_cast<const std::byte*>(container_bytes.data()), container_bytes.size()),
+      container,
+      entry_index);
+}
+
 Win95PackIlbmBatchResult analyze_win95_pack_ilbm_batch(std::span<const std::byte> container_bytes,
                                                         const Win95PackContainerResource& container) {
   Win95PackIlbmBatchResult result;
@@ -664,6 +768,29 @@ std::string format_win95_pack_ilbm_index_report(const Win95PackIlbmIndex& index,
     output << "successful_entries_preview_truncated: yes\n";
   }
 
+  return output.str();
+}
+
+std::string format_win95_pack_text_report(const Win95PackTextExtraction& extraction,
+                                          std::string_view source_label,
+                                          const Win95PackTextReportOptions options) {
+  std::ostringstream output;
+  output << "# Caesar II Win95 PACK Text Entry Report\n";
+  if (!source_label.empty()) {
+    output << "source: " << source_label << "\n";
+  }
+
+  output << "entry_index: " << extraction.entry.index << "\n";
+  output << "offset: " << extraction.entry.offset << "\n";
+  output << "size: " << extraction.entry.size << "\n";
+  output << "classification: " << extraction.entry.classification_hint << "\n";
+  output << "line_count: " << extraction.line_count << "\n";
+  output << "character_count: " << extraction.character_count << "\n";
+  bool truncated = false;
+  output << "text_preview: "
+         << make_text_preview(extraction.decoded_text, options.preview_character_limit, &truncated)
+         << "\n";
+  output << "text_preview_truncated: " << (truncated ? "yes" : "no") << "\n";
   return output.str();
 }
 

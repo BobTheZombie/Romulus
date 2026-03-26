@@ -56,6 +56,8 @@ struct ParsedArguments {
   bool probe_win95_container_entries_all = false;
   std::optional<std::string> probe_pack_ilbm_container_file;
   std::optional<std::size_t> probe_pack_ilbm_entry_index;
+  std::optional<std::string> probe_pack_text_container_file;
+  std::optional<std::size_t> probe_pack_text_entry_index;
   std::optional<std::string> probe_pack_ilbm_batch_container_file;
   bool probe_pack_ilbm_batch_entries_all = false;
   std::optional<std::string> index_pack_ilbm_container_file;
@@ -69,6 +71,8 @@ struct ParsedArguments {
   std::optional<std::size_t> extract_pack_ilbm_entry_index;
   std::optional<std::string> view_pack_ilbm_container_file;
   std::optional<std::size_t> view_pack_ilbm_entry_index;
+  std::optional<std::string> export_pack_text_container_file;
+  std::optional<std::size_t> export_pack_text_entry_index;
   bool index_zero_transparent = false;
   std::optional<std::string> data_dir;
 };
@@ -328,6 +332,23 @@ struct ParsedArguments {
       continue;
     }
 
+    if (argument == "--probe-pack-text") {
+      if (index + 2 >= argc) {
+        romulus::core::log_error("--probe-pack-text requires <container> <entry_index>.");
+        return std::nullopt;
+      }
+
+      parsed.probe_pack_text_container_file = argv[++index];
+      const auto parsed_index = parse_size_t_argument(argv[++index]);
+      if (!parsed_index.has_value()) {
+        romulus::core::log_error("Invalid --probe-pack-text entry_index; expected a non-negative integer.");
+        return std::nullopt;
+      }
+
+      parsed.probe_pack_text_entry_index = parsed_index;
+      continue;
+    }
+
     if (argument == "--probe-pack-ilbm-batch") {
       if (index + 1 >= argc) {
         romulus::core::log_error("--probe-pack-ilbm-batch requires <container>.");
@@ -433,6 +454,23 @@ struct ParsedArguments {
       }
 
       parsed.view_pack_ilbm_entry_index = parsed_index;
+      continue;
+    }
+
+    if (argument == "--export-pack-text") {
+      if (index + 2 >= argc) {
+        romulus::core::log_error("--export-pack-text requires <container> <entry_index>.");
+        return std::nullopt;
+      }
+
+      parsed.export_pack_text_container_file = argv[++index];
+      const auto parsed_index = parse_size_t_argument(argv[++index]);
+      if (!parsed_index.has_value()) {
+        romulus::core::log_error("Invalid --export-pack-text entry_index; expected a non-negative integer.");
+        return std::nullopt;
+      }
+
+      parsed.export_pack_text_entry_index = parsed_index;
       continue;
     }
 
@@ -623,29 +661,35 @@ struct ParsedArguments {
   }
 
   const bool has_pack_ilbm_probe = parsed.probe_pack_ilbm_container_file.has_value();
+  const bool has_pack_text_probe = parsed.probe_pack_text_container_file.has_value();
   const bool has_pack_ilbm_batch_probe = parsed.probe_pack_ilbm_batch_container_file.has_value();
   const bool has_pack_ilbm_index = parsed.index_pack_ilbm_container_file.has_value();
   const bool has_pack_ilbm_success_export = parsed.export_pack_ilbm_success_container_file.has_value();
   const bool has_pack_ilbm_first_export = parsed.export_pack_ilbm_first_container_file.has_value();
   const bool has_pack_ilbm_extract = parsed.extract_pack_ilbm_container_file.has_value();
   const bool has_pack_ilbm_view = parsed.view_pack_ilbm_container_file.has_value();
+  const bool has_pack_text_export = parsed.export_pack_text_container_file.has_value();
   const int pack_ilbm_mode_count = static_cast<int>(has_pack_ilbm_probe) + static_cast<int>(has_pack_ilbm_batch_probe) +
+                                   static_cast<int>(has_pack_text_probe) +
                                    static_cast<int>(has_pack_ilbm_index) +
                                    static_cast<int>(has_pack_ilbm_success_export) +
                                    static_cast<int>(has_pack_ilbm_first_export) +
                                    static_cast<int>(has_pack_ilbm_extract) +
-                                   static_cast<int>(has_pack_ilbm_view);
+                                   static_cast<int>(has_pack_ilbm_view) +
+                                   static_cast<int>(has_pack_text_export);
   if (pack_ilbm_mode_count > 1) {
     romulus::core::log_error(
-        "PACK ILBM command modes are mutually exclusive.");
+        "PACK extraction command modes are mutually exclusive.");
     return std::nullopt;
   }
 
   if ((has_pack_ilbm_probe && !parsed.probe_pack_ilbm_entry_index.has_value()) ||
+      (has_pack_text_probe && !parsed.probe_pack_text_entry_index.has_value()) ||
       (has_pack_ilbm_success_export && !parsed.export_pack_ilbm_success_entry_index.has_value()) ||
       (has_pack_ilbm_extract && !parsed.extract_pack_ilbm_entry_index.has_value()) ||
+      (has_pack_text_export && !parsed.export_pack_text_entry_index.has_value()) ||
       (has_pack_ilbm_view && !parsed.view_pack_ilbm_entry_index.has_value())) {
-    romulus::core::log_error("PACK ILBM commands require a valid entry index.");
+    romulus::core::log_error("PACK entry extraction commands require a valid entry index.");
     return std::nullopt;
   }
 
@@ -654,8 +698,9 @@ struct ParsedArguments {
     return std::nullopt;
   }
 
-  if (has_pack_ilbm_probe || has_pack_ilbm_batch_probe || has_pack_ilbm_index || has_pack_ilbm_success_export ||
-      has_pack_ilbm_first_export || has_pack_ilbm_extract || has_pack_ilbm_view) {
+  if (has_pack_ilbm_probe || has_pack_text_probe || has_pack_ilbm_batch_probe || has_pack_ilbm_index ||
+      has_pack_ilbm_success_export || has_pack_ilbm_first_export || has_pack_ilbm_extract || has_pack_ilbm_view ||
+      has_pack_text_export) {
     const bool has_other_mode = parsed.inventory_manifest || parsed.probe_file.has_value() ||
                                 !parsed.probe_candidates.empty() || parsed.match_signature.has_value() ||
                                 !parsed.classify_candidates.empty() || parsed.export_tile_file.has_value() ||
@@ -666,7 +711,7 @@ struct ParsedArguments {
                                 parsed.probe_exe_resource_payloads_file.has_value() || parsed.probe_win95_data ||
                                 parsed.probe_win95_container_file.has_value();
     if (has_other_mode) {
-      romulus::core::log_error("PACK ILBM commands are mutually exclusive with other command modes.");
+      romulus::core::log_error("PACK extraction commands are mutually exclusive with other command modes.");
       return std::nullopt;
     }
   }
@@ -707,9 +752,14 @@ struct ParsedArguments {
     return std::nullopt;
   }
 
-  if (!has_pack_ilbm_extract && !has_pack_ilbm_success_export && parsed.export_output_file.has_value() &&
+  if (!has_pack_ilbm_extract && !has_pack_ilbm_success_export && !has_pack_text_export && parsed.export_output_file.has_value() &&
       !has_any_tile_export_arg && !has_lbm_export_arg) {
     romulus::core::log_error("--export-output requires an export mode.");
+    return std::nullopt;
+  }
+
+  if (has_pack_text_export && !parsed.export_output_file.has_value()) {
+    romulus::core::log_error("--export-pack-text requires --export-output.");
     return std::nullopt;
   }
 
@@ -1109,6 +1159,35 @@ int run_lbm_viewer(const std::filesystem::path& data_root, const std::string& lb
   return extracted.value.value();
 }
 
+[[nodiscard]] std::optional<romulus::data::Win95PackTextExtraction> decode_pack_text_entry(
+    const std::filesystem::path& data_root,
+    const std::string& container_file_arg,
+    std::size_t entry_index) {
+  const auto container_path = resolve_data_relative(data_root, container_file_arg);
+  const auto loaded = romulus::data::load_file_to_memory(container_path);
+  if (!loaded.ok()) {
+    romulus::core::log_error(loaded.error.value().message);
+    return std::nullopt;
+  }
+
+  const auto parsed_container = romulus::data::parse_win95_pack_container(loaded.value.value().bytes);
+  if (!parsed_container.ok()) {
+    romulus::core::log_error(parsed_container.error.value().message);
+    return std::nullopt;
+  }
+
+  const auto extracted = romulus::data::extract_win95_pack_text_entry(
+      loaded.value.value().bytes,
+      parsed_container.value.value(),
+      entry_index);
+  if (!extracted.ok()) {
+    romulus::core::log_error(extracted.error.value().message);
+    return std::nullopt;
+  }
+
+  return extracted.value.value();
+}
+
 int run_pack_ilbm_probe(const std::filesystem::path& data_root,
                         const std::string& container_file_arg,
                         const std::size_t entry_index) {
@@ -1118,6 +1197,23 @@ int run_pack_ilbm_probe(const std::filesystem::path& data_root,
   }
 
   std::cout << romulus::data::format_lbm_report(extracted->ilbm);
+  return 0;
+}
+
+int run_pack_text_probe(const std::filesystem::path& data_root,
+                        const std::string& container_file_arg,
+                        const std::size_t entry_index) {
+  const auto extracted = decode_pack_text_entry(data_root, container_file_arg, entry_index);
+  if (!extracted.has_value()) {
+    return 1;
+  }
+
+  std::cout << romulus::data::format_win95_pack_text_report(
+      extracted.value(),
+      container_file_arg,
+      romulus::data::Win95PackTextReportOptions{
+          .preview_character_limit = 160,
+      });
   return 0;
 }
 
@@ -1371,6 +1467,32 @@ int run_pack_ilbm_viewer(const std::filesystem::path& data_root,
   return app.run();
 }
 
+int run_pack_text_export(const std::filesystem::path& data_root,
+                         const std::string& container_file_arg,
+                         const std::size_t entry_index,
+                         const std::string& output_file_arg) {
+  const auto extracted = decode_pack_text_entry(data_root, container_file_arg, entry_index);
+  if (!extracted.has_value()) {
+    return 1;
+  }
+
+  const auto output_path = resolve_data_relative(data_root, output_file_arg);
+  std::ofstream output(output_path, std::ios::out | std::ios::binary | std::ios::trunc);
+  if (!output.is_open()) {
+    romulus::core::log_error("Failed to open PACK text export output file: " + output_path.string());
+    return 1;
+  }
+
+  output.write(extracted->decoded_text.data(), static_cast<std::streamsize>(extracted->decoded_text.size()));
+  if (!output.good()) {
+    romulus::core::log_error("Failed to write PACK text export output file: " + output_path.string());
+    return 1;
+  }
+
+  romulus::core::log_info("Exported PACK text entry to: " + output_path.string());
+  return 0;
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -1387,6 +1509,7 @@ int main(int argc, char* argv[]) {
         "[--probe-win95-container <path>] "
         "[--probe-win95-container-entries-all] "
         "[--probe-pack-ilbm <container> <entry_index>] "
+        "[--probe-pack-text <container> <entry_index>] "
         "[--probe-pack-ilbm-batch <container>] "
         "[--probe-pack-ilbm-batch-entries-all] "
         "[--index-pack-ilbm <container>] "
@@ -1395,6 +1518,7 @@ int main(int argc, char* argv[]) {
         "[--export-pack-ilbm-first <container> <count> --export-output-dir <dir>] "
         "[--extract-pack-ilbm <container> <entry_index> --export-output <path>] "
         "[--view-pack-ilbm <container> <entry_index>] "
+        "[--export-pack-text <container> <entry_index> --export-output <path>] "
         "[--export-lbm-file <path> --export-output <path>] "
         "[--view-lbm-file <path>] "
         "[--classify-candidate <path> ...] [--classify-include-secondary] "
@@ -1423,12 +1547,14 @@ int main(int argc, char* argv[]) {
                                          parsed->probe_exe_resource_payloads_file.has_value() ||
                                          parsed->probe_win95_data || parsed->probe_win95_container_file.has_value() ||
                                          parsed->probe_pack_ilbm_container_file.has_value() ||
+                                         parsed->probe_pack_text_container_file.has_value() ||
                                          parsed->probe_pack_ilbm_batch_container_file.has_value() ||
                                          parsed->index_pack_ilbm_container_file.has_value() ||
                                          parsed->export_pack_ilbm_success_container_file.has_value() ||
                                          parsed->export_pack_ilbm_first_container_file.has_value() ||
                                          parsed->extract_pack_ilbm_container_file.has_value() ||
                                          parsed->view_pack_ilbm_container_file.has_value() ||
+                                         parsed->export_pack_text_container_file.has_value() ||
                                          parsed->export_lbm_file.has_value() || parsed->view_lbm_file.has_value() ||
                                          !parsed->probe_candidates.empty() || parsed->match_signature.has_value() ||
                                          !parsed->classify_candidates.empty() || parsed->export_tile_file.has_value() ||
@@ -1483,6 +1609,12 @@ int main(int argc, char* argv[]) {
                                parsed->probe_pack_ilbm_entry_index.value());
   }
 
+  if (parsed->probe_pack_text_container_file.has_value()) {
+    return run_pack_text_probe(data_root,
+                               parsed->probe_pack_text_container_file.value(),
+                               parsed->probe_pack_text_entry_index.value());
+  }
+
   if (parsed->probe_pack_ilbm_batch_container_file.has_value()) {
     return run_pack_ilbm_batch_probe(data_root,
                                      parsed->probe_pack_ilbm_batch_container_file.value(),
@@ -1521,6 +1653,13 @@ int main(int argc, char* argv[]) {
                                 parsed->view_pack_ilbm_container_file.value(),
                                 parsed->view_pack_ilbm_entry_index.value(),
                                 parsed->smoke_test);
+  }
+
+  if (parsed->export_pack_text_container_file.has_value()) {
+    return run_pack_text_export(data_root,
+                                parsed->export_pack_text_container_file.value(),
+                                parsed->export_pack_text_entry_index.value(),
+                                parsed->export_output_file.value());
   }
 
   if (parsed->export_lbm_file.has_value()) {
