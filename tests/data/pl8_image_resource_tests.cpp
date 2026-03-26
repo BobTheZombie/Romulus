@@ -17,22 +17,17 @@ int assert_true(bool condition, const std::string& message) {
   return 0;
 }
 
-std::vector<std::uint8_t> make_forum_style_pl8_image_fixture() {
-  std::vector<std::uint8_t> bytes(romulus::data::Pl8ImageResource::kSupportedFileSize, 0);
+std::vector<std::uint8_t> make_forum_style_pl8_image_fixture(const std::uint16_t width = 640,
+                                                              const std::uint16_t height = 480) {
+  const auto payload_size = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+  std::vector<std::uint8_t> bytes(romulus::data::Pl8ImageResource::kHeaderSize + payload_size, 0);
 
-  const std::uint32_t width = romulus::data::Pl8ImageResource::kSupportedWidth;
-  const std::uint32_t height = romulus::data::Pl8ImageResource::kSupportedHeight;
   bytes[8] = static_cast<std::uint8_t>(width & 0xFFU);
   bytes[9] = static_cast<std::uint8_t>((width >> 8U) & 0xFFU);
-  bytes[10] = static_cast<std::uint8_t>((width >> 16U) & 0xFFU);
-  bytes[11] = static_cast<std::uint8_t>((width >> 24U) & 0xFFU);
+  bytes[10] = static_cast<std::uint8_t>(height & 0xFFU);
+  bytes[11] = static_cast<std::uint8_t>((height >> 8U) & 0xFFU);
 
-  bytes[12] = static_cast<std::uint8_t>(height & 0xFFU);
-  bytes[13] = static_cast<std::uint8_t>((height >> 8U) & 0xFFU);
-  bytes[14] = static_cast<std::uint8_t>((height >> 16U) & 0xFFU);
-  bytes[15] = static_cast<std::uint8_t>((height >> 24U) & 0xFFU);
-
-  for (std::size_t i = 0; i < romulus::data::Pl8ImageResource::kSupportedPayloadSize; ++i) {
+  for (std::size_t i = 0; i < payload_size; ++i) {
     bytes[romulus::data::Pl8ImageResource::kHeaderSize + i] = static_cast<std::uint8_t>(i & 0xFFU);
   }
 
@@ -94,20 +89,33 @@ int test_parse_forum_style_pl8_rejects_payload_mismatch() {
                      "payload mismatch should report deterministic reason");
 }
 
-int test_parse_forum_style_pl8_rejects_unsupported_dimensions() {
+int test_parse_forum_style_pl8_rejects_zero_dimensions() {
   auto bytes = make_forum_style_pl8_image_fixture();
-  bytes[8] = 0x20;
-  bytes[9] = 0x03;
-  bytes[12] = 0x58;
-  bytes[13] = 0x02;
+  bytes[8] = 0;
+  bytes[9] = 0;
 
   const auto parsed = romulus::data::parse_caesar2_forum_pl8_image(bytes);
-  if (assert_true(!parsed.ok(), "unsupported dimensions should fail") != 0) {
+  if (assert_true(!parsed.ok(), "zero dimensions should fail") != 0) {
     return 1;
   }
 
   return assert_true(parsed.error->message.find("Unsupported FORUM-style PL8 image layout") != std::string::npos,
-                     "unsupported dimensions should fail explicitly");
+                     "invalid dimensions should fail explicitly");
+}
+
+int test_parse_forum_style_pl8_accepts_non_640x480_dimensions() {
+  const auto bytes = make_forum_style_pl8_image_fixture(320, 200);
+  const auto parsed = romulus::data::parse_caesar2_forum_pl8_image(bytes);
+  if (assert_true(parsed.ok(), "same family non-640x480 dimensions should parse") != 0) {
+    return 1;
+  }
+
+  if (assert_true(parsed.value->width == 320 && parsed.value->height == 200,
+                  "decoded dimensions should use u16 width/height fields") != 0) {
+    return 1;
+  }
+
+  return assert_true(parsed.value->payload_size == 64000, "payload should match parsed dimensions");
 }
 
 int test_decode_forum_style_pl8_with_256_palette_success() {
@@ -146,6 +154,11 @@ int test_format_pl8_image_report_is_stable() {
     return 1;
   }
 
+  if (assert_true(report.find("payload_matches_dimensions: yes") != std::string::npos,
+                  "report should include explicit payload-match status") != 0) {
+    return 1;
+  }
+
   return assert_true(report.find("width: 640") != std::string::npos,
                      "report should include deterministic dimensions");
 }
@@ -169,7 +182,11 @@ int main() {
     return EXIT_FAILURE;
   }
 
-  if (test_parse_forum_style_pl8_rejects_unsupported_dimensions() != 0) {
+  if (test_parse_forum_style_pl8_rejects_zero_dimensions() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_parse_forum_style_pl8_accepts_non_640x480_dimensions() != 0) {
     return EXIT_FAILURE;
   }
 
