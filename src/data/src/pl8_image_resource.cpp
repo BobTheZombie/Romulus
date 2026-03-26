@@ -1,6 +1,8 @@
 #include "romulus/data/pl8_image_resource.h"
 
 #include <algorithm>
+#include <array>
+#include <map>
 #include <sstream>
 
 namespace romulus::data {
@@ -369,6 +371,163 @@ ParseResult<Pl8ImageVariantProbeReport> probe_caesar2_large_pl8_image_variant(st
       std::span<const std::byte>(reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()));
 }
 
+ParseResult<StructuredPl8StructuredRegionsProbeReport> probe_caesar2_rat_back_structured_pl8_regions(
+    std::span<const std::byte> bytes) {
+  const auto parsed_header = parse_large_pl8_common_header(bytes);
+  if (!parsed_header.ok()) {
+    if (parsed_header.error->message.find("Unsupported large-PL8 image layout") != std::string::npos) {
+      std::ostringstream message;
+      message << "Unsupported RAT_BACK-style structured PL8 reconnaissance layout: expected at least header_size="
+              << Pl8ImageResource::kHeaderSize << " bytes, got " << bytes.size();
+      return {.error = make_invalid_pl8_image_error(Pl8ImageResource::kHeaderSize, bytes.size(), message.str())};
+    }
+    return {.error = parsed_header.error};
+  }
+
+  StructuredPl8StructuredRegionsProbeReport report;
+  report.file_size = bytes.size();
+  report.header_size = Pl8ImageResource::kHeaderSize;
+  report.payload_offset = Pl8ImageResource::kHeaderSize;
+  report.width = parsed_header.value->width;
+  report.height = parsed_header.value->height;
+  report.payload_size = bytes.size() - report.header_size;
+  report.expected_image_size = static_cast<std::size_t>(report.width) * static_cast<std::size_t>(report.height);
+  report.payload_surplus_or_deficit =
+      static_cast<std::ptrdiff_t>(report.payload_size) - static_cast<std::ptrdiff_t>(report.expected_image_size);
+
+  if (report.payload_size < 8) {
+    std::ostringstream message;
+    message << "RAT_BACK-style structured reconnaissance payload too small: requires at least 8 bytes after header, got "
+            << report.payload_size;
+    return {.error = make_invalid_pl8_image_error(8, report.payload_size, message.str())};
+  }
+
+  const auto* payload_begin = bytes.data() + report.payload_offset;
+  constexpr std::size_t kMaxLeadingFields = 8;
+  const auto leading_field_count = std::min(kMaxLeadingFields, report.payload_size / sizeof(std::uint32_t));
+  report.leading_fields.reserve(leading_field_count);
+  for (std::size_t field_index = 0; field_index < leading_field_count; ++field_index) {
+    const auto byte_offset = field_index * sizeof(std::uint32_t);
+    const auto* field_ptr = payload_begin + byte_offset;
+    const auto low_u16 = static_cast<std::uint16_t>(
+        static_cast<std::uint16_t>(std::to_integer<std::uint8_t>(field_ptr[0])) |
+        (static_cast<std::uint16_t>(std::to_integer<std::uint8_t>(field_ptr[1])) << 8U));
+    const auto u32 =
+        static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(field_ptr[0])) |
+        (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(field_ptr[1])) << 8U) |
+        (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(field_ptr[2])) << 16U) |
+        (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(field_ptr[3])) << 24U);
+    report.leading_fields.push_back({.index = field_index, .value_u16le = low_u16, .value_u32le = u32});
+  }
+
+  constexpr std::array<std::size_t, 5> kRecordSizes = {4, 6, 8, 12, 16};
+  constexpr std::size_t kMaxScannedRecords = 64;
+  for (const auto record_size : kRecordSizes) {
+    if (report.payload_size < record_size * 2) {
+      continue;
+    }
+
+    const auto scanned_records = std::min(kMaxScannedRecords, report.payload_size / record_size);
+    std::size_t plausible_pairs = 0;
+    std::size_t monotonic_offsets = 0;
+    std::size_t repeated_records = 0;
+    std::optional<std::size_t> previous_start;
+    std::map<std::string, std::size_t> record_histogram;
+
+    for (std::size_t record_index = 0; record_index < scanned_records; ++record_index) {
+      const auto record_base = payload_begin + (record_index * record_size);
+      std::ostringstream signature_builder;
+      for (std::size_t byte_index = 0; byte_index < record_size; ++byte_index) {
+        signature_builder << static_cast<unsigned int>(std::to_integer<std::uint8_t>(record_base[byte_index])) << ",";
+      }
+      const auto inserted = record_histogram.insert_or_assign(signature_builder.str(), 0);
+      if (!inserted.second) {
+        inserted.first->second += 1;
+        repeated_records += 1;
+      } else {
+        inserted.first->second = 1;
+      }
+
+      std::size_t start = 0;
+      std::size_t length = 0;
+      if (record_size >= 8) {
+        start = static_cast<std::size_t>(static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(record_base[0])) |
+                                         (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(record_base[1])) << 8U) |
+                                         (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(record_base[2])) << 16U) |
+                                         (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(record_base[3])) << 24U));
+        length = static_cast<std::size_t>(static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(record_base[4])) |
+                                          (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(record_base[5])) << 8U) |
+                                          (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(record_base[6])) << 16U) |
+                                          (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(record_base[7])) << 24U));
+      } else {
+        start = static_cast<std::size_t>(static_cast<std::uint16_t>(std::to_integer<std::uint8_t>(record_base[0])) |
+                                         (static_cast<std::uint16_t>(std::to_integer<std::uint8_t>(record_base[1])) << 8U));
+        length = static_cast<std::size_t>(static_cast<std::uint16_t>(std::to_integer<std::uint8_t>(record_base[2])) |
+                                          (static_cast<std::uint16_t>(std::to_integer<std::uint8_t>(record_base[3])) << 8U));
+      }
+
+      if (length > 0 && start < report.payload_size && start + length <= report.payload_size) {
+        plausible_pairs += 1;
+        if (previous_start.has_value() && start >= previous_start.value()) {
+          monotonic_offsets += 1;
+        }
+        previous_start = start;
+      }
+    }
+
+    report.record_hints.push_back({.record_size = record_size,
+                                   .scanned_records = scanned_records,
+                                   .plausible_offset_length_pairs = plausible_pairs,
+                                   .monotonic_offset_pairs = monotonic_offsets,
+                                   .repeated_record_count = repeated_records});
+  }
+
+  constexpr std::size_t kMaxPairRegions = 12;
+  for (std::size_t field_index = 0; field_index + 1 < report.leading_fields.size() &&
+                                   report.region_hints.size() < kMaxPairRegions;
+       field_index += 2) {
+    const auto start = static_cast<std::size_t>(report.leading_fields[field_index].value_u32le);
+    const auto size = static_cast<std::size_t>(report.leading_fields[field_index + 1].value_u32le);
+    const bool in_bounds = size > 0 && start < report.payload_size && start + size <= report.payload_size;
+    report.region_hints.push_back(
+        {.source = "leading_u32_pairs", .entry_index = field_index / 2, .start_offset = start, .region_size = size, .in_bounds = in_bounds});
+  }
+
+  constexpr std::size_t kMaxOffsetTableFields = 16;
+  std::vector<std::size_t> offsets;
+  offsets.reserve(kMaxOffsetTableFields);
+  for (std::size_t index = 0; index < std::min(kMaxOffsetTableFields, report.leading_fields.size()); ++index) {
+    const auto value = static_cast<std::size_t>(report.leading_fields[index].value_u32le);
+    if (value > 0 && value < report.payload_size) {
+      offsets.push_back(value);
+    }
+  }
+  std::sort(offsets.begin(), offsets.end());
+  offsets.erase(std::unique(offsets.begin(), offsets.end()), offsets.end());
+  if (offsets.size() >= 2) {
+    for (std::size_t index = 0; index + 1 < offsets.size() && report.region_hints.size() < kMaxPairRegions; ++index) {
+      const auto start = offsets[index];
+      const auto next = offsets[index + 1];
+      if (next <= start) {
+        continue;
+      }
+      report.region_hints.push_back({.source = "monotonic_offset_table",
+                                     .entry_index = index,
+                                     .start_offset = start,
+                                     .region_size = next - start,
+                                     .in_bounds = true});
+    }
+  }
+
+  return {.value = std::move(report)};
+}
+
+ParseResult<StructuredPl8StructuredRegionsProbeReport> probe_caesar2_rat_back_structured_pl8_regions(
+    std::span<const std::uint8_t> bytes) {
+  return probe_caesar2_rat_back_structured_pl8_regions(
+      std::span<const std::byte>(reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()));
+}
+
 ParseResult<Pl8Image256PairDecodeResult> decode_caesar2_forum_pl8_image_pair(
     std::span<const std::uint8_t> image_pl8_bytes,
     std::span<const std::uint8_t> palette_256_bytes,
@@ -557,6 +716,69 @@ std::string format_pl8_image_variant_comparison_report(const Pl8ImageVariantProb
   output << format_pl8_image_variant_probe_report(lhs, preview_bytes);
   output << "## rhs\n";
   output << format_pl8_image_variant_probe_report(rhs, preview_bytes);
+  return output.str();
+}
+
+std::string format_pl8_structured_regions_probe_report(const StructuredPl8StructuredRegionsProbeReport& report) {
+  std::ostringstream output;
+  output << "# Caesar II Win95 RAT_BACK-style Structured PL8 Regions Reconnaissance\n";
+  output << "supported_layout: rat_back_structured_regions_probe_24b_header\n";
+  output << "header_size: " << report.header_size << "\n";
+  output << "payload_offset: " << report.payload_offset << "\n";
+  output << "file_size: " << report.file_size << "\n";
+  output << "width: " << report.width << "\n";
+  output << "height: " << report.height << "\n";
+  output << "payload_bytes_after_header: " << report.payload_size << "\n";
+  output << "payload_expected_from_dimensions: " << report.expected_image_size << "\n";
+  output << "payload_surplus_or_deficit: " << report.payload_surplus_or_deficit << "\n";
+  output << "leading_fields:\n";
+  for (const auto& field : report.leading_fields) {
+    output << "  - field_" << field.index << "_u16le: " << field.value_u16le << "\n";
+    output << "    field_" << field.index << "_u32le: " << field.value_u32le << "\n";
+  }
+  output << "record_hints:\n";
+  for (const auto& hint : report.record_hints) {
+    output << "  - record_size: " << hint.record_size << "\n";
+    output << "    scanned_records: " << hint.scanned_records << "\n";
+    output << "    plausible_offset_length_pairs: " << hint.plausible_offset_length_pairs << "\n";
+    output << "    monotonic_offset_pairs: " << hint.monotonic_offset_pairs << "\n";
+    output << "    repeated_record_count: " << hint.repeated_record_count << "\n";
+  }
+  output << "candidate_regions:\n";
+  for (const auto& region : report.region_hints) {
+    output << "  - source: " << region.source << "\n";
+    output << "    entry_index: " << region.entry_index << "\n";
+    output << "    start_offset: " << region.start_offset << "\n";
+    output << "    region_size: " << region.region_size << "\n";
+    output << "    in_bounds: " << (region.in_bounds ? "yes" : "no") << "\n";
+  }
+  output << "decode_status: not_attempted\n";
+  return output.str();
+}
+
+std::string format_pl8_structured_regions_comparison_report(
+    const StructuredPl8StructuredRegionsProbeReport& lhs,
+    const std::string& lhs_label,
+    const StructuredPl8StructuredRegionsProbeReport& rhs,
+    const std::string& rhs_label) {
+  std::ostringstream output;
+  output << "# Caesar II Win95 RAT_BACK-style Structured PL8 Regions Comparison\n";
+  output << "lhs_label: " << lhs_label << "\n";
+  output << "rhs_label: " << rhs_label << "\n";
+  output << "width_equal: " << (lhs.width == rhs.width ? "yes" : "no") << "\n";
+  output << "height_equal: " << (lhs.height == rhs.height ? "yes" : "no") << "\n";
+  output << "payload_size_delta_rhs_minus_lhs: "
+         << (static_cast<std::ptrdiff_t>(rhs.payload_size) - static_cast<std::ptrdiff_t>(lhs.payload_size)) << "\n";
+  output << "payload_surplus_delta_rhs_minus_lhs: "
+         << (rhs.payload_surplus_or_deficit - lhs.payload_surplus_or_deficit) << "\n";
+  output << "record_hint_count_lhs: " << lhs.record_hints.size() << "\n";
+  output << "record_hint_count_rhs: " << rhs.record_hints.size() << "\n";
+  output << "region_hint_count_lhs: " << lhs.region_hints.size() << "\n";
+  output << "region_hint_count_rhs: " << rhs.region_hints.size() << "\n";
+  output << "\n## lhs\n";
+  output << format_pl8_structured_regions_probe_report(lhs);
+  output << "## rhs\n";
+  output << format_pl8_structured_regions_probe_report(rhs);
   return output.str();
 }
 

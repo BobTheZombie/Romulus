@@ -69,6 +69,42 @@ struct StructuredPl8Image256PairDecodeResult {
   RgbaImage rgba_image;
 };
 
+struct StructuredPl8LeadingFieldSample {
+  std::size_t index = 0;
+  std::uint16_t value_u16le = 0;
+  std::uint32_t value_u32le = 0;
+};
+
+struct StructuredPl8RecordHint {
+  std::size_t record_size = 0;
+  std::size_t scanned_records = 0;
+  std::size_t plausible_offset_length_pairs = 0;
+  std::size_t monotonic_offset_pairs = 0;
+  std::size_t repeated_record_count = 0;
+};
+
+struct StructuredPl8RegionHint {
+  std::string source;
+  std::size_t entry_index = 0;
+  std::size_t start_offset = 0;
+  std::size_t region_size = 0;
+  bool in_bounds = false;
+};
+
+struct StructuredPl8StructuredRegionsProbeReport {
+  std::size_t file_size = 0;
+  std::size_t header_size = 0;
+  std::size_t payload_offset = 0;
+  std::uint16_t width = 0;
+  std::uint16_t height = 0;
+  std::size_t payload_size = 0;
+  std::size_t expected_image_size = 0;
+  std::ptrdiff_t payload_surplus_or_deficit = 0;
+  std::vector<StructuredPl8LeadingFieldSample> leading_fields;
+  std::vector<StructuredPl8RecordHint> record_hints;
+  std::vector<StructuredPl8RegionHint> region_hints;
+};
+
 struct Pl8ImageVariantProbeReport {
   std::size_t file_size = 0;
   std::size_t header_size = 0;
@@ -99,6 +135,10 @@ struct Pl8ImageVariantProbeReport {
     std::span<const std::byte> bytes);
 [[nodiscard]] ParseResult<Pl8ImageVariantProbeReport> probe_caesar2_large_pl8_image_variant(
     std::span<const std::uint8_t> bytes);
+[[nodiscard]] ParseResult<StructuredPl8StructuredRegionsProbeReport> probe_caesar2_rat_back_structured_pl8_regions(
+    std::span<const std::byte> bytes);
+[[nodiscard]] ParseResult<StructuredPl8StructuredRegionsProbeReport> probe_caesar2_rat_back_structured_pl8_regions(
+    std::span<const std::uint8_t> bytes);
 
 [[nodiscard]] ParseResult<Pl8Image256PairDecodeResult> decode_caesar2_forum_pl8_image_pair(
     std::span<const std::uint8_t> image_pl8_bytes,
@@ -118,5 +158,12 @@ struct Pl8ImageVariantProbeReport {
                                                                      const Pl8ImageVariantProbeReport& rhs,
                                                                      const std::string& rhs_label,
                                                                      std::size_t preview_bytes = 8);
+[[nodiscard]] std::string format_pl8_structured_regions_probe_report(
+    const StructuredPl8StructuredRegionsProbeReport& report);
+[[nodiscard]] std::string format_pl8_structured_regions_comparison_report(
+    const StructuredPl8StructuredRegionsProbeReport& lhs,
+    const std::string& lhs_label,
+    const StructuredPl8StructuredRegionsProbeReport& rhs,
+    const std::string& rhs_label);
 
 }  // namespace romulus::data
