@@ -63,6 +63,48 @@ std::vector<std::uint8_t> make_256_palette_fixture() {
   return bytes;
 }
 
+std::vector<std::uint8_t> make_structured_pl8_fixture(const std::uint16_t width = 96,
+                                                       const std::uint16_t height = 337,
+                                                       const std::uint32_t image_offset = 16,
+                                                       const std::uint32_t image_size = 0,
+                                                       const std::size_t trailing_bytes = 32,
+                                                       const bool malformed_prefix = false) {
+  const auto expected_image_size = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+  const auto effective_image_size = image_size == 0 ? expected_image_size : static_cast<std::size_t>(image_size);
+  const auto payload_size = malformed_prefix ? 8 : (image_offset + effective_image_size + trailing_bytes);
+
+  std::vector<std::uint8_t> bytes(romulus::data::Pl8ImageResource::kHeaderSize + payload_size, 0);
+  bytes[8] = static_cast<std::uint8_t>(width & 0xFFU);
+  bytes[9] = static_cast<std::uint8_t>((width >> 8U) & 0xFFU);
+  bytes[10] = static_cast<std::uint8_t>(height & 0xFFU);
+  bytes[11] = static_cast<std::uint8_t>((height >> 8U) & 0xFFU);
+
+  if (!malformed_prefix) {
+    const std::uint32_t field_values[4] = {
+        image_offset,
+        static_cast<std::uint32_t>(effective_image_size),
+        0x01020304U,
+        0xA5A5A5A5U,
+    };
+
+    for (std::size_t field_index = 0; field_index < 4; ++field_index) {
+      const auto field_offset = romulus::data::Pl8ImageResource::kHeaderSize + field_index * 4;
+      bytes[field_offset + 0] = static_cast<std::uint8_t>(field_values[field_index] & 0xFFU);
+      bytes[field_offset + 1] = static_cast<std::uint8_t>((field_values[field_index] >> 8U) & 0xFFU);
+      bytes[field_offset + 2] = static_cast<std::uint8_t>((field_values[field_index] >> 16U) & 0xFFU);
+      bytes[field_offset + 3] = static_cast<std::uint8_t>((field_values[field_index] >> 24U) & 0xFFU);
+    }
+
+    if (image_offset + effective_image_size <= payload_size) {
+      for (std::size_t i = 0; i < effective_image_size; ++i) {
+        bytes[romulus::data::Pl8ImageResource::kHeaderSize + image_offset + i] = static_cast<std::uint8_t>(i & 0xFFU);
+      }
+    }
+  }
+
+  return bytes;
+}
+
 int test_parse_forum_style_pl8_image_success() {
   const auto bytes = make_forum_style_pl8_image_fixture();
   const auto parsed = romulus::data::parse_caesar2_forum_pl8_image(bytes);
@@ -244,6 +286,86 @@ int test_format_large_pl8_variant_comparison_report_is_stable() {
                      "comparison should include deterministic labels");
 }
 
+int test_parse_structured_pl8_success() {
+  const auto bytes = make_structured_pl8_fixture();
+  const auto parsed = romulus::data::parse_caesar2_rat_back_structured_pl8_image(bytes);
+  if (assert_true(parsed.ok(), "structured fixture should parse") != 0) {
+    return 1;
+  }
+
+  if (assert_true(parsed.value->selected_region.has_value(), "structured fixture should isolate one image region") != 0) {
+    return 1;
+  }
+
+  if (assert_true(parsed.value->selected_region->payload_offset == 16, "selected region offset should be deterministic") != 0) {
+    return 1;
+  }
+
+  return assert_true(parsed.value->indexed_pixels.size() == parsed.value->expected_image_size,
+                     "decoded indexed pixels should match expected area");
+}
+
+int test_parse_structured_pl8_rejects_malformed_prefix() {
+  const auto bytes = make_structured_pl8_fixture(96, 337, 16, 0, 32, true);
+  const auto parsed = romulus::data::parse_caesar2_rat_back_structured_pl8_image(bytes);
+  if (assert_true(!parsed.ok(), "malformed prefix fixture should fail") != 0) {
+    return 1;
+  }
+
+  return assert_true(parsed.error->message.find("structured payload too small") != std::string::npos,
+                     "malformed prefix failure should be explicit");
+}
+
+int test_parse_structured_pl8_rejects_invalid_candidate_offset() {
+  const auto bytes = make_structured_pl8_fixture(96, 337, 4);
+  const auto parsed = romulus::data::parse_caesar2_rat_back_structured_pl8_image(bytes);
+  if (assert_true(!parsed.ok(), "candidate that points into prefix should fail") != 0) {
+    return 1;
+  }
+
+  return assert_true(parsed.error->message.find("did not yield a deterministic image region") != std::string::npos,
+                     "invalid candidate should fail with deterministic reason");
+}
+
+int test_format_structured_pl8_report_is_stable() {
+  const auto bytes = make_structured_pl8_fixture();
+  const auto parsed = romulus::data::parse_caesar2_rat_back_structured_pl8_image(bytes);
+  if (assert_true(parsed.ok(), "structured fixture should parse before report formatting") != 0) {
+    return 1;
+  }
+
+  const auto report = romulus::data::format_pl8_structured_report(parsed.value.value());
+  if (assert_true(report.find("# Caesar II Win95 RAT_BACK-style Structured PL8 Report") != std::string::npos,
+                  "structured report should include stable title") != 0) {
+    return 1;
+  }
+
+  if (assert_true(report.find("field_0_u32le: 16") != std::string::npos,
+                  "structured report should include deterministic field output") != 0) {
+    return 1;
+  }
+
+  return assert_true(report.find("primary_image_region_identified: yes") != std::string::npos,
+                     "structured report should include decode status");
+}
+
+int test_decode_structured_pl8_with_256_palette_success() {
+  const auto image = make_structured_pl8_fixture();
+  const auto palette = make_256_palette_fixture();
+  const auto decoded = romulus::data::decode_caesar2_rat_back_structured_pl8_image_pair(image, palette, true);
+  if (assert_true(decoded.ok(), "structured PL8 + .256 should decode") != 0) {
+    return 1;
+  }
+
+  if (assert_true(decoded.value->rgba_image.width == 96 && decoded.value->rgba_image.height == 337,
+                  "decoded structured image should preserve dimensions") != 0) {
+    return 1;
+  }
+
+  return assert_true(decoded.value->rgba_image.pixels_rgba[3] == 0,
+                     "structured decode should respect index-zero transparency");
+}
+
 }  // namespace
 
 int main() {
@@ -284,6 +406,26 @@ int main() {
   }
 
   if (test_format_large_pl8_variant_comparison_report_is_stable() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_parse_structured_pl8_success() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_parse_structured_pl8_rejects_malformed_prefix() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_parse_structured_pl8_rejects_invalid_candidate_offset() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_format_structured_pl8_report_is_stable() != 0) {
+    return EXIT_FAILURE;
+  }
+
+  if (test_decode_structured_pl8_with_256_palette_success() != 0) {
     return EXIT_FAILURE;
   }
 

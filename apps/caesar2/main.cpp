@@ -61,12 +61,17 @@ struct ParsedArguments {
   std::optional<std::string> export_256_palette_file;
   std::optional<std::string> probe_pl8_image_file;
   std::optional<std::string> probe_pl8_image_variant_file;
+  std::optional<std::string> probe_pl8_structured_file;
   std::optional<std::string> compare_pl8_image_variant_lhs_file;
   std::optional<std::string> compare_pl8_image_variant_rhs_file;
   std::optional<std::string> view_pl8_image_file;
   std::optional<std::string> view_pl8_image_palette_file;
   std::optional<std::string> export_pl8_image_file;
   std::optional<std::string> export_pl8_image_palette_file;
+  std::optional<std::string> view_pl8_structured_file;
+  std::optional<std::string> view_pl8_structured_palette_file;
+  std::optional<std::string> export_pl8_structured_file;
+  std::optional<std::string> export_pl8_structured_palette_file;
   std::optional<std::size_t> image_width;
   std::optional<std::size_t> image_height;
   bool probe_win95_data = false;
@@ -319,6 +324,16 @@ struct ParsedArguments {
       continue;
     }
 
+    if (argument == "--probe-pl8-structured") {
+      if (index + 1 >= argc) {
+        romulus::core::log_error("Missing value after --probe-pl8-structured.");
+        return std::nullopt;
+      }
+
+      parsed.probe_pl8_structured_file = argv[++index];
+      continue;
+    }
+
     if (argument == "--compare-pl8-image-variants") {
       if (index + 2 >= argc) {
         romulus::core::log_error("--compare-pl8-image-variants requires <lhs_imagepl8> <rhs_imagepl8>.");
@@ -349,6 +364,28 @@ struct ParsedArguments {
 
       parsed.export_pl8_image_file = argv[++index];
       parsed.export_pl8_image_palette_file = argv[++index];
+      continue;
+    }
+
+    if (argument == "--view-pl8-structured-pair") {
+      if (index + 2 >= argc) {
+        romulus::core::log_error("--view-pl8-structured-pair requires <imagepl8> <palette256>.");
+        return std::nullopt;
+      }
+
+      parsed.view_pl8_structured_file = argv[++index];
+      parsed.view_pl8_structured_palette_file = argv[++index];
+      continue;
+    }
+
+    if (argument == "--export-pl8-structured-pair") {
+      if (index + 2 >= argc) {
+        romulus::core::log_error("--export-pl8-structured-pair requires <imagepl8> <palette256>.");
+        return std::nullopt;
+      }
+
+      parsed.export_pl8_structured_file = argv[++index];
+      parsed.export_pl8_structured_palette_file = argv[++index];
       continue;
     }
 
@@ -812,6 +849,7 @@ struct ParsedArguments {
   const bool has_any_256_mode = has_256_probe_arg || has_256_view_arg || has_256_export_arg;
   const bool has_pl8_image_probe_arg = parsed.probe_pl8_image_file.has_value();
   const bool has_pl8_variant_probe_arg = parsed.probe_pl8_image_variant_file.has_value();
+  const bool has_pl8_structured_probe_arg = parsed.probe_pl8_structured_file.has_value();
   const bool has_pl8_variant_compare_arg =
       parsed.compare_pl8_image_variant_lhs_file.has_value() || parsed.compare_pl8_image_variant_rhs_file.has_value();
   const bool has_pl8_image_view_arg =
@@ -819,9 +857,14 @@ struct ParsedArguments {
   const bool has_pl8_image_export_arg =
       parsed.export_pl8_image_file.has_value() || parsed.export_pl8_image_palette_file.has_value() ||
       (parsed.export_output_file.has_value() && parsed.export_pl8_image_file.has_value());
+  const bool has_pl8_structured_view_arg =
+      parsed.view_pl8_structured_file.has_value() || parsed.view_pl8_structured_palette_file.has_value();
+  const bool has_pl8_structured_export_arg =
+      parsed.export_pl8_structured_file.has_value() || parsed.export_pl8_structured_palette_file.has_value() ||
+      (parsed.export_output_file.has_value() && parsed.export_pl8_structured_file.has_value());
   const bool has_any_pl8_image_mode =
-      has_pl8_image_probe_arg || has_pl8_variant_probe_arg || has_pl8_variant_compare_arg ||
-      has_pl8_image_view_arg || has_pl8_image_export_arg;
+      has_pl8_image_probe_arg || has_pl8_variant_probe_arg || has_pl8_structured_probe_arg || has_pl8_variant_compare_arg ||
+      has_pl8_image_view_arg || has_pl8_image_export_arg || has_pl8_structured_view_arg || has_pl8_structured_export_arg;
   if (has_pl8_image_view_arg) {
     if (!parsed.view_pl8_image_file.has_value() || !parsed.view_pl8_image_palette_file.has_value()) {
       romulus::core::log_error("--view-pl8-image-pair requires <imagepl8> <palette256>.");
@@ -839,6 +882,20 @@ struct ParsedArguments {
   if (has_pl8_variant_compare_arg) {
     if (!parsed.compare_pl8_image_variant_lhs_file.has_value() || !parsed.compare_pl8_image_variant_rhs_file.has_value()) {
       romulus::core::log_error("--compare-pl8-image-variants requires <lhs_imagepl8> <rhs_imagepl8>.");
+      return std::nullopt;
+    }
+  }
+  if (has_pl8_structured_view_arg) {
+    if (!parsed.view_pl8_structured_file.has_value() || !parsed.view_pl8_structured_palette_file.has_value()) {
+      romulus::core::log_error("--view-pl8-structured-pair requires <imagepl8> <palette256>.");
+      return std::nullopt;
+    }
+  }
+  if (has_pl8_structured_export_arg) {
+    if (!parsed.export_pl8_structured_file.has_value() || !parsed.export_pl8_structured_palette_file.has_value() ||
+        !parsed.export_output_file.has_value()) {
+      romulus::core::log_error(
+          "--export-pl8-structured-pair requires <imagepl8> <palette256> --export-output <path>.");
       return std::nullopt;
     }
   }
@@ -1331,6 +1388,37 @@ struct ParsedArguments {
   return decoded.value.value();
 }
 
+[[nodiscard]] std::optional<romulus::data::StructuredPl8Image256PairDecodeResult> decode_pl8_structured_256_to_rgba(
+    const std::filesystem::path& data_root,
+    const std::string& image_pl8_file_arg,
+    const std::string& palette_256_file_arg,
+    const bool index_zero_transparent) {
+  const auto image_path = resolve_data_relative(data_root, image_pl8_file_arg);
+  const auto palette_path = resolve_data_relative(data_root, palette_256_file_arg);
+
+  const auto loaded_image = romulus::data::load_file_to_memory(image_path);
+  if (!loaded_image.ok()) {
+    romulus::core::log_error(loaded_image.error->message);
+    return std::nullopt;
+  }
+
+  const auto loaded_palette = romulus::data::load_file_to_memory(palette_path);
+  if (!loaded_palette.ok()) {
+    romulus::core::log_error(loaded_palette.error->message);
+    return std::nullopt;
+  }
+
+  const auto decoded = romulus::data::decode_caesar2_rat_back_structured_pl8_image_pair(loaded_image.value->bytes,
+                                                                                          loaded_palette.value->bytes,
+                                                                                          index_zero_transparent);
+  if (!decoded.ok()) {
+    romulus::core::log_error(decoded.error->message);
+    return std::nullopt;
+  }
+
+  return decoded.value.value();
+}
+
 [[nodiscard]] std::optional<romulus::data::RgbaImage> decode_tile_image_to_rgba(const std::filesystem::path& data_root,
                                                                                  const std::string& tile_file_arg,
                                                                                  const std::string& palette_file_arg,
@@ -1659,6 +1747,25 @@ int run_pl8_image_variant_probe(const std::filesystem::path& data_root, const st
   return 0;
 }
 
+int run_pl8_structured_probe(const std::filesystem::path& data_root, const std::string& image_pl8_file_arg) {
+  const auto image_path = resolve_data_relative(data_root, image_pl8_file_arg);
+  const auto loaded = romulus::data::load_file_to_memory(image_path);
+  if (!loaded.ok()) {
+    romulus::core::log_error(loaded.error->message);
+    return 1;
+  }
+
+  const auto parsed = romulus::data::parse_caesar2_rat_back_structured_pl8_image(loaded.value->bytes);
+  if (!parsed.ok()) {
+    romulus::core::log_error(parsed.error->message);
+    return 1;
+  }
+
+  std::cout << "source_path: " << image_path.string() << "\n";
+  std::cout << romulus::data::format_pl8_structured_report(parsed.value.value());
+  return 0;
+}
+
 int run_pl8_image_variant_compare(const std::filesystem::path& data_root,
                                   const std::string& lhs_pl8_file_arg,
                                   const std::string& rhs_pl8_file_arg) {
@@ -1735,6 +1842,51 @@ int run_pl8_image_pair_export(const std::filesystem::path& data_root,
   }
 
   romulus::core::log_info("Exported decoded PL8-image+.256 pair to: " + output_path.string());
+  return 0;
+}
+
+int run_pl8_structured_pair_viewer(const std::filesystem::path& data_root,
+                                   const std::string& image_pl8_file_arg,
+                                   const std::string& palette_256_file_arg,
+                                   const bool smoke_test,
+                                   const bool index_zero_transparent) {
+  const auto decoded = decode_pl8_structured_256_to_rgba(data_root,
+                                                          image_pl8_file_arg,
+                                                          palette_256_file_arg,
+                                                          index_zero_transparent);
+  if (!decoded.has_value()) {
+    return 1;
+  }
+
+  romulus::platform::Application app({
+      .smoke_test = smoke_test,
+      .data_root = data_root,
+      .debug_view_image = decoded->rgba_image,
+  });
+  return app.run();
+}
+
+int run_pl8_structured_pair_export(const std::filesystem::path& data_root,
+                                   const std::string& image_pl8_file_arg,
+                                   const std::string& palette_256_file_arg,
+                                   const std::string& output_file_arg,
+                                   const bool index_zero_transparent) {
+  const auto decoded = decode_pl8_structured_256_to_rgba(data_root,
+                                                          image_pl8_file_arg,
+                                                          palette_256_file_arg,
+                                                          index_zero_transparent);
+  if (!decoded.has_value()) {
+    return 1;
+  }
+
+  const auto output_path = resolve_data_relative(data_root, output_file_arg);
+  const auto exported = romulus::data::export_rgba_image_as_ppm(decoded->rgba_image, output_path);
+  if (!exported.ok()) {
+    romulus::core::log_error(exported.error->message);
+    return 1;
+  }
+
+  romulus::core::log_info("Exported decoded structured-PL8+.256 pair to: " + output_path.string());
   return 0;
 }
 
@@ -2500,12 +2652,15 @@ int main(int argc, char* argv[]) {
         "Usage: caesar2 [--smoke-test] [--data-dir <path>] [--inventory-manifest] [--manifest-out <path>] "
         "[--probe-file <path>] [--probe-candidate <path>] [--match-signature <path>] "
         "[--probe-lbm <path>] [--probe-pl8 <path> ...] [--probe-pl8-image <path>] "
-        "[--probe-pl8-image-variant <path>] [--compare-pl8-image-variants <lhs_imagepl8> <rhs_imagepl8>] "
+        "[--probe-pl8-image-variant <path>] [--probe-pl8-structured <path>] "
+        "[--compare-pl8-image-variants <lhs_imagepl8> <rhs_imagepl8>] "
         "[--probe-256 <path> [--width <w> --height <h>]] "
         "[--view-256-pl8 <image256> <palettepl8> [--width <w> --height <h>]] "
         "[--export-256-pl8 <image256> <palettepl8> --export-output <path> [--width <w> --height <h>]] "
         "[--view-pl8-image-pair <imagepl8> <palette256>] "
         "[--export-pl8-image-pair <imagepl8> <palette256> --export-output <path>] "
+        "[--view-pl8-structured-pair <imagepl8> <palette256>] "
+        "[--export-pl8-structured-pair <imagepl8> <palette256> --export-output <path>] "
         "[--probe-exe <path>] "
         "[--probe-exe-resources <path>] "
         "[--probe-exe-resource-payloads <path>] "
@@ -2559,12 +2714,15 @@ int main(int argc, char* argv[]) {
                                          parsed->probe_lbm_file.has_value() || !parsed->probe_pl8_files.empty() ||
                                          parsed->probe_pl8_image_file.has_value() ||
                                          parsed->probe_pl8_image_variant_file.has_value() ||
+                                         parsed->probe_pl8_structured_file.has_value() ||
                                          parsed->compare_pl8_image_variant_lhs_file.has_value() ||
                                          parsed->compare_pl8_image_variant_rhs_file.has_value() ||
                                          parsed->probe_256_file.has_value() || parsed->view_256_file.has_value() ||
                                          parsed->export_256_file.has_value() ||
                                          parsed->view_pl8_image_file.has_value() ||
                                          parsed->export_pl8_image_file.has_value() ||
+                                         parsed->view_pl8_structured_file.has_value() ||
+                                         parsed->export_pl8_structured_file.has_value() ||
                                          parsed->probe_exe_file.has_value() || parsed->probe_exe_resources_file.has_value() ||
                                          parsed->probe_exe_resource_payloads_file.has_value() ||
                                          parsed->probe_win95_data || parsed->probe_win95_container_file.has_value() ||
@@ -2618,6 +2776,10 @@ int main(int argc, char* argv[]) {
     return run_pl8_image_variant_probe(data_root, parsed->probe_pl8_image_variant_file.value());
   }
 
+  if (parsed->probe_pl8_structured_file.has_value()) {
+    return run_pl8_structured_probe(data_root, parsed->probe_pl8_structured_file.value());
+  }
+
   if (parsed->compare_pl8_image_variant_lhs_file.has_value()) {
     return run_pl8_image_variant_compare(data_root,
                                          parsed->compare_pl8_image_variant_lhs_file.value(),
@@ -2657,7 +2819,23 @@ int main(int argc, char* argv[]) {
                                      parsed->export_pl8_image_file.value(),
                                      parsed->export_pl8_image_palette_file.value(),
                                      parsed->export_output_file.value(),
-                                     parsed->index_zero_transparent);
+                              parsed->index_zero_transparent);
+  }
+
+  if (parsed->view_pl8_structured_file.has_value()) {
+    return run_pl8_structured_pair_viewer(data_root,
+                                          parsed->view_pl8_structured_file.value(),
+                                          parsed->view_pl8_structured_palette_file.value(),
+                                          parsed->smoke_test,
+                                          parsed->index_zero_transparent);
+  }
+
+  if (parsed->export_pl8_structured_file.has_value()) {
+    return run_pl8_structured_pair_export(data_root,
+                                          parsed->export_pl8_structured_file.value(),
+                                          parsed->export_pl8_structured_palette_file.value(),
+                                          parsed->export_output_file.value(),
+                                          parsed->index_zero_transparent);
   }
 
   if (!parsed->probe_pl8_files.empty()) {

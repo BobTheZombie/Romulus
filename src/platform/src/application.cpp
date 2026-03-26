@@ -160,14 +160,33 @@ void blend_rgba_layers(romulus::data::RgbaImage* destination, const romulus::dat
                             selection->palette_256_logical_path.string() +
                             "' bytes=" + std::to_string(loaded_palette.value->bytes.size()));
 
-    const auto decoded_overlay = romulus::data::decode_caesar2_forum_pl8_image_pair(loaded_image.value->bytes,
-                                                                                     loaded_palette.value->bytes,
-                                                                                     true);
+    auto decoded_overlay = romulus::data::decode_caesar2_forum_pl8_image_pair(loaded_image.value->bytes,
+                                                                                loaded_palette.value->bytes,
+                                                                                true);
     if (!decoded_overlay.ok()) {
-      romulus::core::log_warning("Forum compose overlay skipped: decode failed for image='" +
-                                 selection->image_pl8_logical_path.string() + "' reason='" +
-                                 decoded_overlay.error->message + "'");
-      continue;
+      romulus::core::log_info("Forum compose overlay FORUM-style decode failed for image='" +
+                              selection->image_pl8_logical_path.string() + "' reason='" +
+                              decoded_overlay.error->message + "'; attempting RAT_BACK-style structured parser.");
+      const auto structured_overlay = romulus::data::decode_caesar2_rat_back_structured_pl8_image_pair(
+          loaded_image.value->bytes, loaded_palette.value->bytes, true);
+      if (!structured_overlay.ok()) {
+        romulus::core::log_warning("Forum compose overlay skipped: decode failed for image='" +
+                                   selection->image_pl8_logical_path.string() + "' forum_reason='" +
+                                   decoded_overlay.error->message + "' structured_reason='" +
+                                   structured_overlay.error->message + "'");
+        continue;
+      }
+
+      decoded_overlay = romulus::data::Pl8Image256PairDecodeResult{
+          .image_pl8 = {.header_size = structured_overlay.value->image_pl8.header_size,
+                        .payload_offset = structured_overlay.value->image_pl8.payload_offset,
+                        .width = structured_overlay.value->image_pl8.width,
+                        .height = structured_overlay.value->image_pl8.height,
+                        .payload_size = structured_overlay.value->image_pl8.payload_size,
+                        .indexed_pixels = structured_overlay.value->image_pl8.indexed_pixels},
+          .palette_256 = structured_overlay.value->palette_256,
+          .rgba_image = structured_overlay.value->rgba_image,
+      };
     }
 
     if (decoded_overlay.value->rgba_image.width != composed.width ||
