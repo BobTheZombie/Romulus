@@ -1938,7 +1938,9 @@ int run_pl8_image_probe(const std::filesystem::path& data_root, const std::strin
   return 0;
 }
 
-int run_pl8_sprite_probe(const std::filesystem::path& data_root, const std::string& image_pl8_file_arg) {
+int run_pl8_sprite_probe(const std::filesystem::path& data_root,
+                         const std::string& image_pl8_file_arg,
+                         const std::optional<std::size_t>& sprite_index) {
   const auto image_path = resolve_data_relative(data_root, image_pl8_file_arg);
   const auto loaded = romulus::data::load_file_to_memory(image_path);
   if (!loaded.ok()) {
@@ -1950,6 +1952,17 @@ int run_pl8_sprite_probe(const std::filesystem::path& data_root, const std::stri
   if (!parsed.ok()) {
     romulus::core::log_error(parsed.error->message);
     return 1;
+  }
+
+  if (sprite_index.has_value()) {
+    const auto target_index = sprite_index.value();
+    if (target_index >= parsed.value->sprites.size()) {
+      romulus::core::log_error("PL8 sprite index out of range for sprite table: " + std::to_string(target_index));
+      return 1;
+    }
+
+    std::cout << romulus::data::format_pl8_sprite_table_report_for_sprite(parsed.value.value(), target_index);
+    return 0;
   }
 
   std::cout << romulus::data::format_pl8_sprite_table_report(parsed.value.value());
@@ -3152,7 +3165,7 @@ int main(int argc, char* argv[]) {
     return run_pl8_image_probe(data_root, parsed->probe_pl8_image_file.value());
   }
   if (parsed->probe_pl8_sprites_file.has_value()) {
-    return run_pl8_sprite_probe(data_root, parsed->probe_pl8_sprites_file.value());
+    return run_pl8_sprite_probe(data_root, parsed->probe_pl8_sprites_file.value(), parsed->pl8_sprite_index);
   }
   if (parsed->probe_pl8_sprite_placement_image_file.has_value()) {
     return run_pl8_sprite_placement_probe(data_root,

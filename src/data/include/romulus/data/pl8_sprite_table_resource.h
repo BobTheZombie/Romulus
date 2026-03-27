@@ -74,6 +74,12 @@ struct Pl8SpriteCompositionResult {
 
 struct Pl8SpriteReportEntry {
   std::size_t sprite_index = 0;
+  std::uint16_t width = 0;
+  std::uint16_t height = 0;
+  std::int16_t x = 0;
+  std::int16_t y = 0;
+  std::uint16_t tile_type = 0;
+  std::uint16_t extra_rows = 0;
   std::string decode_status;
   std::string composition_status;
 };
@@ -116,6 +122,8 @@ struct Pl8SpritePairDecodeResult {
 
 [[nodiscard]] std::string format_pl8_sprite_table_report(const Pl8SpriteTableResource& resource,
                                                          std::size_t max_sprites = 64);
+[[nodiscard]] std::string format_pl8_sprite_table_report_for_sprite(const Pl8SpriteTableResource& resource,
+                                                                    std::size_t sprite_index);
 [[nodiscard]] std::string format_pl8_sprite_pair_multi_report(const Pl8SpritePairMultiDecodeResult& result,
                                                               std::size_t max_sprites = 64);
 

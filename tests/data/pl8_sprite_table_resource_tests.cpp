@@ -312,12 +312,51 @@ int test_multi_sprite_report_format_is_stable() {
                   "report should include decode support field") != 0) {
     return 1;
   }
+  if (assert_true(report.find("image.header.sprite_count: 3") != std::string::npos,
+                  "report should include image header fields") != 0) {
+    return 1;
+  }
   if (assert_true(report.find("composed_bounds: min=(0,0) max=(4,3)") != std::string::npos,
                   "report should include composed bounds") != 0) {
     return 1;
   }
-  return assert_true(report.find("sprite[1]: decode=supported_type0, compose=composed") != std::string::npos,
-                     "report should include per-sprite decode/composition status");
+  return assert_true(report.find(
+                         "sprite[1]: width=2, height=2, x=0, y=1, tile_type=0, extra_rows=0, decode=supported_type0, "
+                         "compose=composed") != std::string::npos,
+                     "report should include per-sprite descriptor + decode/composition status");
+}
+
+int test_single_sprite_probe_report_is_stable() {
+  const auto image = make_multi_sprite_fixture();
+  const auto parsed = romulus::data::parse_caesar2_pl8_sprite_table(image);
+  if (assert_true(parsed.ok(), "single-sprite report fixture should parse") != 0) {
+    return 1;
+  }
+
+  const auto report = romulus::data::format_pl8_sprite_table_report_for_sprite(parsed.value.value(), 2);
+  if (assert_true(report.find("sprite[2]: width=2, height=2, data_offset=64, x=2, y=1, tile_type=0, extra_rows=0, "
+                              "decode=supported_type0") != std::string::npos,
+                  "single-sprite report should include only requested sprite row") != 0) {
+    return 1;
+  }
+
+  return assert_true(report.find("sprite[0]:") == std::string::npos,
+                     "single-sprite report should omit non-requested sprite rows");
+}
+
+int test_multi_sprite_report_shows_clean_failure_reason() {
+  auto image = make_multi_sprite_fixture();
+  write_u16_le(image, 36, 3);
+  const auto palette = make_256_palette_fixture();
+  const auto decoded = romulus::data::decode_caesar2_pl8_sprite_pair_multi(image, palette, true);
+  if (assert_true(decoded.ok(), "mixed-support report should still be produced") != 0) {
+    return 1;
+  }
+
+  const auto report = romulus::data::format_pl8_sprite_pair_multi_report(decoded.value.value());
+  return assert_true(report.find("sprite[1]: width=2, height=2, x=0, y=1, tile_type=3, extra_rows=0, "
+                                 "decode=unsupported_tile_type, compose=decode_failed") != std::string::npos,
+                     "failed sprite should report explicit deterministic reason");
 }
 
 int test_sprite_pair_decode_selected_index_from_multi_sprite_fixture() {
@@ -365,6 +404,8 @@ int main() {
   rc |= test_multi_sprite_index_zero_transparency();
   rc |= test_multi_sprite_invalid_offset_fails();
   rc |= test_multi_sprite_report_format_is_stable();
+  rc |= test_single_sprite_probe_report_is_stable();
+  rc |= test_multi_sprite_report_shows_clean_failure_reason();
   rc |= test_sprite_pair_decode_selected_index_from_multi_sprite_fixture();
   rc |= test_sprite_pair_decode_fails_for_out_of_range_index();
 
