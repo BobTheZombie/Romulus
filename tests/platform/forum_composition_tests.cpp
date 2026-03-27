@@ -177,8 +177,8 @@ int test_destination_rect_calculation_by_mode_is_deterministic() {
 int test_asset_specific_mapping_for_rat_back_is_deterministic() {
   if (assert_true(romulus::platform::resolve_sprite_placement_mode(
                       "RAT_BACK.PL8", 0, romulus::platform::SpritePlacementMode::TopLeft) ==
-                      romulus::platform::SpritePlacementMode::BottomCenter,
-                  "RAT_BACK sprite[0] should use bottom-center placement") != 0) {
+                      romulus::platform::SpritePlacementMode::TopCenter,
+                  "RAT_BACK sprite[0] should use top-center placement") != 0) {
     return 1;
   }
   if (assert_true(romulus::platform::resolve_sprite_placement_mode(
@@ -194,7 +194,7 @@ int test_asset_specific_mapping_for_rat_back_is_deterministic() {
 }
 
 
-int test_rat_back_compose_reports_uniform_bottom_center_modes() {
+int test_rat_back_compose_reports_mixed_semantic_modes() {
   const auto result = romulus::platform::compose_sprite_layer_to_canvas(
       64,
       64,
@@ -208,11 +208,17 @@ int test_rat_back_compose_reports_uniform_bottom_center_modes() {
     return 1;
   }
 
-  for (std::size_t i = 0; i < result->debug_entries.size(); ++i) {
-    if (assert_true(result->debug_entries[i].resolved_mode == romulus::platform::SpritePlacementMode::BottomCenter,
-                    "RAT_BACK debug entry should resolve to bottom-center mode") != 0) {
-      return 1;
-    }
+  if (assert_true(result->debug_entries[0].resolved_mode == romulus::platform::SpritePlacementMode::TopCenter,
+                  "RAT_BACK sprite[0] debug entry should resolve to top-center mode") != 0) {
+    return 1;
+  }
+  if (assert_true(result->debug_entries[1].resolved_mode == romulus::platform::SpritePlacementMode::BottomCenter,
+                  "RAT_BACK sprite[1] debug entry should resolve to bottom-center mode") != 0) {
+    return 1;
+  }
+  if (assert_true(result->debug_entries[2].resolved_mode == romulus::platform::SpritePlacementMode::BottomCenter,
+                  "RAT_BACK sprite[2] debug entry should resolve to bottom-center mode") != 0) {
+    return 1;
   }
 
   return 0;
@@ -316,7 +322,7 @@ int main() {
   if (test_asset_specific_mapping_for_rat_back_is_deterministic() != 0) {
     return EXIT_FAILURE;
   }
-  if (test_rat_back_compose_reports_uniform_bottom_center_modes() != 0) {
+  if (test_rat_back_compose_reports_mixed_semantic_modes() != 0) {
     return EXIT_FAILURE;
   }
   if (test_asset_specific_mapping_fallback_is_unchanged_for_non_rat_back() != 0) {
