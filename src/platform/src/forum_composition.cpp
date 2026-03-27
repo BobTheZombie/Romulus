@@ -65,7 +65,10 @@ SpritePlacementMode resolve_sprite_placement_mode(const std::string& asset_name,
   });
 
   if (normalized_file == "rat_back.pl8") {
-    if (sprite_index <= 2) {
+    if (sprite_index == 0) {
+      return SpritePlacementMode::TopCenter;
+    }
+    if (sprite_index == 1 || sprite_index == 2) {
       return SpritePlacementMode::BottomCenter;
     }
   }
