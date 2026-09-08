@@ -2,6 +2,18 @@ add_executable(romulus_timestep_tests core/timestep_tests.cpp)
 target_link_libraries(romulus_timestep_tests PRIVATE romulus::core)
 add_test(NAME romulus_timestep_tests COMMAND romulus_timestep_tests)
 
+add_executable(romulus_city_map_tests sim/city_map_tests.cpp)
+target_link_libraries(romulus_city_map_tests PRIVATE romulus::sim)
+add_test(NAME romulus_city_map_tests COMMAND romulus_city_map_tests)
+
+add_executable(romulus_road_pathfinder_tests sim/road_pathfinder_tests.cpp)
+target_link_libraries(romulus_road_pathfinder_tests PRIVATE romulus::sim)
+add_test(NAME romulus_road_pathfinder_tests COMMAND romulus_road_pathfinder_tests)
+
+add_executable(romulus_city_simulation_tests sim/city_simulation_tests.cpp)
+target_link_libraries(romulus_city_simulation_tests PRIVATE romulus::sim)
+add_test(NAME romulus_city_simulation_tests COMMAND romulus_city_simulation_tests)
+
 add_executable(romulus_data_root_tests data/data_root_tests.cpp)
 target_link_libraries(romulus_data_root_tests PRIVATE romulus::data)
 add_test(NAME romulus_data_root_tests COMMAND romulus_data_root_tests)
