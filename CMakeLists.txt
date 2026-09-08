@@ -13,14 +13,11 @@ find_package(SDL2 REQUIRED)
 add_subdirectory(src/core)
 add_subdirectory(src/data)
 add_subdirectory(src/platform)
+add_subdirectory(src/sim)
 
 add_library(romulus_render INTERFACE)
 add_library(romulus::render ALIAS romulus_render)
 target_include_directories(romulus_render INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-
-add_library(romulus_sim INTERFACE)
-add_library(romulus::sim ALIAS romulus_sim)
-target_include_directories(romulus_sim INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 add_library(romulus_ui INTERFACE)
 add_library(romulus::ui ALIAS romulus_ui)
